@@ -218,7 +218,7 @@ if __name__ == "__main__":
         print(f"Base netlist generated: {spice_template}")
         
         # VDDが0VだとDC収束エラーになりやすいため、動作下限付近（例: 0.6V〜3.0V）からスイープする
-        vdd_sweep = np.arange(0.6, 4.0, 0.01)
+        vdd_sweep = np.arange(0.6, 4.0, 0.1)
         results = {}
         
         for vdd in vdd_sweep:
@@ -237,6 +237,7 @@ if __name__ == "__main__":
             success, stdout = run_ngspice(work_spice)
             if success:
                 print(f"VDD = {vdd:.2f}V: Simulation Success")
+                print(stdout)
 
                 meas_results = extract_measure_results(stdout)
 
