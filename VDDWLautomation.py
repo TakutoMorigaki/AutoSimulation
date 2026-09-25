@@ -253,6 +253,7 @@ if __name__ == "__main__":
                 "Wp_um",
                 "Wtail_um",
                 "L_um",
+                "VDD_V",
                 "gain_dc_dB"
             ])
 
