@@ -249,6 +249,9 @@ if __name__ == "__main__":
             else:
                 print(f"VDD = {vdd:.2f}V: Simulation Failed")
 
+            if os.path.exists(work_spice):
+                os.remove(work_spice)
+
         csv_path = os.path.join(STUDY_DIR, "vdd_gain_results.csv")
 
         with open(csv_path, "w", newline="") as f:

@@ -323,6 +323,98 @@ def extract_vout(stdout_text):
 
     return None
 
+# ============================================================
+# ngspiceの出力から各トランジスタの id,vds,vdsat,vgs,vth を取得
+# ============================================================
+
+def extract_device_parameters(stdout_text):
+
+    devices = []
+    data = {}
+
+    lines = stdout_text.splitlines()
+
+    current_devices = []
+
+    for line in lines:
+
+        stripped = line.strip()
+
+        # --------------------------------------------
+        # device行
+        # --------------------------------------------
+
+        if stripped.lower().startswith("device"):
+
+            tokens = stripped.split()
+            current_devices = tokens[1:]
+
+            for device in current_devices:
+
+                match = re.search(
+                    r'\.x1\.(xm\d+)\.m\d+',
+                    device,
+                    re.IGNORECASE
+                )
+
+                if match:
+                    transistor = match.group(1).upper()
+                else:
+                    transistor = device
+
+                if transistor not in data:
+                    data[transistor] = {}
+
+
+        # --------------------------------------------
+        # 各パラメータ
+        # --------------------------------------------
+
+        elif current_devices:
+
+            tokens = stripped.split()
+
+            if len(tokens) < 2:
+                continue
+
+            parameter = tokens[0].lower()
+
+            if parameter not in [
+                "id",
+                "vds",
+                "vdsat",
+                "vgs",
+                "vth"
+            ]:
+                continue
+
+            values = tokens[1:]
+
+            if len(values) != len(current_devices):
+                continue
+
+            for device, value in zip(
+                current_devices,
+                values
+            ):
+
+                match = re.search(
+                    r'\.x1\.(xm\d+)\.m\d+',
+                    device,
+                    re.IGNORECASE
+                )
+
+                if match:
+                    transistor = match.group(1).upper()
+                else:
+                    transistor = device
+
+                data[transistor][parameter] = float(value)
+
+    # print(data)
+
+    return data
+
 
 # ============================================================
 # メイン
@@ -358,23 +450,23 @@ if __name__ == "__main__":
 
         # VDD
         vdd_sweep = np.arange(
-            0.6,
-            1.0,
+            3.3,
+            3.4,
             0.1
         )
 
         # Vb
         vb_sweep = np.arange(
-            0.3,
-            1.01,
+            0.8,
+            0.9,
             0.1
         )
 
         # Vin
         vin_sweep = np.arange(
             0.3,
-            1.01,
-            0.1
+            1.7,
+            0.01
         )
 
 
@@ -469,20 +561,26 @@ if __name__ == "__main__":
                         # ------------------------------------
 
                         vout = extract_vout(stdout)
+                        data = extract_device_parameters(stdout)
 
 
                         if vout is not None:
 
                             print(
                                 f"SUCCESS: "
-                                f"Vout = {vout:.6g} V"
+                                f"Vout = {vout:.6g} V, Av = {vout/vin:.6g}"
                             )
+                            print(f"M1: id = {data["m.xm1.m0"]["id"]}A, vds = {data["m.xm1.m0"]["vds"]:.4f}V, vdsat = {data["m.xm1.m0"]["vdsat"]:.4f}V, vgs = {data['m.xm1.m0']["vgs"]}V, vth = {data['m.xm1.m0']["vth"]:.4f}")
+                            print(f"M2: id = {data["m.xm2.m0"]["id"]}A, vds = {data["m.xm2.m0"]["vds"]:.4f}V, vdsat = {data["m.xm2.m0"]["vdsat"]:.4f}V, vgs = {data['m.xm2.m0']["vgs"]}V, vth = {data['m.xm2.m0']["vth"]:.4f}")
+
+                            # print(stdout)
 
                             results.append([
                                 vdd,
                                 vb,
                                 vin,
-                                vout
+                                vout,
+                                vout/vin
                             ])
 
                         else:
@@ -499,6 +597,9 @@ if __name__ == "__main__":
                         print(
                             "Simulation Failed"
                         )
+
+                    if os.path.exists(work_spice):
+                        os.remove(work_spice)
 
 
         # ====================================================
@@ -523,7 +624,8 @@ if __name__ == "__main__":
                 "VDD_V",
                 "Vb_V",
                 "Vin_V",
-                "Vout_V"
+                "Vout_V",
+                "Av"
             ])
 
             writer.writerows(results)
