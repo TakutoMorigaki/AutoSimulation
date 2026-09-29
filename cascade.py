@@ -4,6 +4,7 @@ import re
 import numpy as np
 import csv
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 # ============================================================
@@ -445,6 +446,122 @@ def is_saturated(params):
 
 
 # ============================================================
+# 1条件分のシミュレーション (並列実行の単位)
+# ============================================================
+
+def simulate_point(template_content, vdd, vb, vin):
+    """
+    1つの (VDD, Vb, Vin) についてネットリスト作成 → ngspice実行 → 解析を行う。
+    並列実行時に表示が混ざらないよう、ログは文字列で返す。
+
+    戻り値: (row または None, ログ文字列)
+    """
+
+    log = [
+        f"====================================\n"
+        f"VDD = {vdd:.2f} V\n"
+        f"Vb  = {vb:.2f} V\n"
+        f"Vin = {vin:.2f} V\n"
+        f"===================================="
+    ]
+
+    # ----------------------------------------
+    # 作業用ネットリスト
+    # (条件ごとにファイル名が異なるので並列でも衝突しない)
+    # ----------------------------------------
+
+    work_spice = os.path.join(
+        NETLIST_DIR,
+        (
+            f"cascade_"
+            f"vdd_{vdd:.2f}_"
+            f"vb_{vb:.2f}_"
+            f"vin_{vin:.2f}.spice"
+        )
+    )
+
+    row = None
+
+    try:
+
+        # テンプレートをコピー
+        with open(work_spice, "w") as dst:
+            dst.write(template_content)
+
+        # .paramを書き換える
+        modify_netlist_params(
+            work_spice,
+            vdd_val=vdd,
+            vb_val=vb,
+            vin_val=vin
+        )
+
+        # ngspice実行
+        success, stdout = run_ngspice(work_spice)
+
+        if not success:
+            log.append("Simulation Failed")
+            return None, "\n".join(log)
+
+        vout = extract_vout(stdout)
+        data = extract_device_parameters(stdout)
+
+        if vout is None:
+            log.append("WARNING: v(out) が取得できませんでした")
+            log.append(stdout)
+            return None, "\n".join(log)
+
+        log.append(
+            f"SUCCESS: "
+            f"Vout = {vout:.6g} V, Av = {vout/vin:.6g}"
+        )
+
+        row = {
+            "VDD_V": vdd,
+            "Vb_V": vb,
+            "Vin_V": vin,
+            "Vout_V": vout,
+            "Av": vout / vin
+        }
+
+        all_sat = True
+
+        for transistor in sorted(data):
+
+            params = data[transistor]
+            sat = is_saturated(params)
+            name = transistor.replace("XM", "M")
+
+            for p in DEVICE_PARAMS:
+                row[f"{name}_{p}"] = params.get(p)
+
+            row[f"{name}_sat"] = (
+                None if sat is None else int(sat)
+            )
+
+            if not sat:
+                all_sat = False
+
+            log.append(
+                f"{name}: id = {params.get('id')}A, "
+                f"vds = {params.get('vds')}V, "
+                f"vdsat = {params.get('vdsat')}V, "
+                f"vgs = {params.get('vgs')}V, "
+                f"vth = {params.get('vth')}V, "
+                f"sat = {sat}"
+            )
+
+        row["all_sat"] = int(bool(data) and all_sat)
+
+    finally:
+
+        if os.path.exists(work_spice):
+            os.remove(work_spice)
+
+    return row, "\n".join(log)
+
+
+# ============================================================
 # メイン
 # ============================================================
 
@@ -498,169 +615,80 @@ if __name__ == "__main__":
         )
 
 
+        # 並列数 (環境変数 NUM_WORKERS で変更可能。既定はCPUコア数)
+        num_workers = int(
+            os.environ.get("NUM_WORKERS", os.cpu_count() or 1)
+        )
+
+        # テンプレートは一度だけ読み込む
+        with open(spice_template, "r") as src:
+            template_content = src.read()
+
+        # 全条件の組み合わせ
+        conditions = [
+            (
+                round(float(vdd), 2),
+                round(float(vb), 2),
+                round(float(vin), 2)
+            )
+            for vdd in vdd_sweep
+            for vb in vb_sweep
+            for vin in vin_sweep
+        ]
+
+        num_iterations = len(conditions)
+
         # 結果保存用
         results = []
 
 
         # ====================================================
-        # 3. VDD × Vb × Vin の全組み合わせを実行
+        # 3. VDD × Vb × Vin の全組み合わせを並列実行
         # ====================================================
+
+        print(
+            f"\nTotal conditions: {num_iterations}, "
+            f"workers: {num_workers}"
+        )
 
         # 計測開始
         start_time = time.perf_counter()
-        num_iterations = 0
 
-        for vdd in vdd_sweep:
+        # ngspiceは別プロセスで動くので、スレッドでも並列に実行される
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
 
-            vdd = round(float(vdd), 2)
+            futures = [
+                executor.submit(
+                    simulate_point,
+                    template_content,
+                    vdd,
+                    vb,
+                    vin
+                )
+                for vdd, vb, vin in conditions
+            ]
 
-            for vb in vb_sweep:
+            for done, future in enumerate(as_completed(futures), 1):
 
-                vb = round(float(vb), 2)
+                try:
+                    row, log = future.result()
+                except Exception as e:
+                    row, log = None, f"ERROR: {e}"
 
-                for vin in vin_sweep:
+                elapsed = time.perf_counter() - start_time
 
-                    vin = round(float(vin), 2)
+                print(
+                    f"\n[{done}/{num_iterations}] "
+                    f"elapsed {elapsed:.1f} s\n{log}"
+                )
 
-                    num_iterations += 1
+                if row is not None:
+                    results.append(row)
 
-                    print(
-                        f"\n"
-                        f"====================================\n"
-                        f"VDD = {vdd:.2f} V\n"
-                        f"Vb  = {vb:.2f} V\n"
-                        f"Vin = {vin:.2f} V\n"
-                        f"===================================="
-                    )
-
-
-                    # ----------------------------------------
-                    # 作業用ネットリスト
-                    # ----------------------------------------
-
-                    work_spice = os.path.join(
-                        NETLIST_DIR,
-                        (
-                            f"cascade_"
-                            f"vdd_{vdd:.2f}_"
-                            f"vb_{vb:.2f}_"
-                            f"vin_{vin:.2f}.spice"
-                        )
-                    )
-
-
-                    # ----------------------------------------
-                    # テンプレートをコピー
-                    # ----------------------------------------
-
-                    with open(
-                        spice_template,
-                        "r"
-                    ) as src:
-
-                        with open(
-                            work_spice,
-                            "w"
-                        ) as dst:
-
-                            dst.write(src.read())
-
-
-                    # ----------------------------------------
-                    # .paramを書き換える
-                    # ----------------------------------------
-
-                    modify_netlist_params(
-                        work_spice,
-                        vdd_val=vdd,
-                        vb_val=vb,
-                        vin_val=vin
-                    )
-
-
-                    # ----------------------------------------
-                    # ngspice実行
-                    # ----------------------------------------
-
-                    success, stdout = run_ngspice(
-                        work_spice
-                    )
-
-
-                    if success:
-
-                        # ------------------------------------
-                        # Voutを取得
-                        # ------------------------------------
-
-                        vout = extract_vout(stdout)
-                        data = extract_device_parameters(stdout)
-
-
-                        if vout is not None:
-
-                            print(
-                                f"SUCCESS: "
-                                f"Vout = {vout:.6g} V, Av = {vout/vin:.6g}"
-                            )
-                            row = {
-                                "VDD_V": vdd,
-                                "Vb_V": vb,
-                                "Vin_V": vin,
-                                "Vout_V": vout,
-                                "Av": vout / vin
-                            }
-
-                            all_sat = True
-
-                            for transistor in sorted(data):
-
-                                params = data[transistor]
-                                sat = is_saturated(params)
-                                name = transistor.replace("XM", "M")
-
-                                for p in DEVICE_PARAMS:
-                                    row[f"{name}_{p}"] = params.get(p)
-
-                                row[f"{name}_sat"] = (
-                                    None if sat is None else int(sat)
-                                )
-
-                                if not sat:
-                                    all_sat = False
-
-                                print(
-                                    f"{name}: id = {params.get('id')}A, "
-                                    f"vds = {params.get('vds')}V, "
-                                    f"vdsat = {params.get('vdsat')}V, "
-                                    f"vgs = {params.get('vgs')}V, "
-                                    f"vth = {params.get('vth')}V, "
-                                    f"sat = {sat}"
-                                )
-
-                            row["all_sat"] = int(bool(data) and all_sat)
-
-                            # print(stdout)
-
-                            results.append(row)
-
-                        else:
-
-                            print(
-                                "WARNING: "
-                                "v(out) が取得できませんでした"
-                            )
-
-                            print(stdout)
-
-                    else:
-
-                        print(
-                            "Simulation Failed"
-                        )
-
-                    if os.path.exists(work_spice):
-                        os.remove(work_spice)
+        # 完了順はバラバラなので、条件順に並べ直す
+        results.sort(
+            key=lambda r: (r["VDD_V"], r["Vb_V"], r["Vin_V"])
+        )
 
 
         # 計測終了
