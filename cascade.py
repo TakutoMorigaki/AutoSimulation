@@ -3,6 +3,7 @@ import subprocess
 import re
 import numpy as np
 import csv
+import time
 
 
 # ============================================================
@@ -327,9 +328,26 @@ def extract_vout(stdout_text):
 # ngspiceの出力から各トランジスタの id,vds,vdsat,vgs,vth を取得
 # ============================================================
 
+def device_to_transistor(device):
+    """
+    m.x1.xm1.m0 / m.xm1.m0 などのデバイス名を XM1 に正規化する。
+    MOS以外 (vin, vdd などの電圧源) は None を返す。
+    """
+
+    match = re.search(
+        r'(xm\d+)',
+        device,
+        re.IGNORECASE
+    )
+
+    if match:
+        return match.group(1).upper()
+
+    return None
+
+
 def extract_device_parameters(stdout_text):
 
-    devices = []
     data = {}
 
     lines = stdout_text.splitlines()
@@ -351,18 +369,9 @@ def extract_device_parameters(stdout_text):
 
             for device in current_devices:
 
-                match = re.search(
-                    r'\.x1\.(xm\d+)\.m\d+',
-                    device,
-                    re.IGNORECASE
-                )
+                transistor = device_to_transistor(device)
 
-                if match:
-                    transistor = match.group(1).upper()
-                else:
-                    transistor = device
-
-                if transistor not in data:
+                if transistor is not None and transistor not in data:
                     data[transistor] = {}
 
 
@@ -398,22 +407,41 @@ def extract_device_parameters(stdout_text):
                 values
             ):
 
-                match = re.search(
-                    r'\.x1\.(xm\d+)\.m\d+',
-                    device,
-                    re.IGNORECASE
-                )
+                transistor = device_to_transistor(device)
 
-                if match:
-                    transistor = match.group(1).upper()
-                else:
-                    transistor = device
+                if transistor is None:
+                    continue
 
-                data[transistor][parameter] = float(value)
+                try:
+                    data[transistor][parameter] = float(value)
+                except ValueError:
+                    pass
 
     # print(data)
 
     return data
+
+
+# ============================================================
+# 飽和判定
+# ============================================================
+
+DEVICE_PARAMS = ["id", "vds", "vdsat", "vgs", "vth"]
+
+
+def is_saturated(params):
+    """
+    |Vgs| > |Vth| かつ |Vds| >= |Vdsat| なら飽和とみなす。
+    (PMOSは負の値で出力されるため絶対値で比較)
+    """
+
+    if not all(p in params for p in ["vds", "vdsat", "vgs", "vth"]):
+        return None
+
+    on = abs(params["vgs"]) > abs(params["vth"])
+    sat = abs(params["vds"]) >= abs(params["vdsat"])
+
+    return on and sat
 
 
 # ============================================================
@@ -450,15 +478,15 @@ if __name__ == "__main__":
 
         # VDD
         vdd_sweep = np.arange(
-            3.3,
-            3.4,
+            1.0,
+            5.0,
             0.1
         )
 
         # Vb
         vb_sweep = np.arange(
-            0.8,
-            0.9,
+            0.5,
+            3.0,
             0.1
         )
 
@@ -466,7 +494,7 @@ if __name__ == "__main__":
         vin_sweep = np.arange(
             0.3,
             1.7,
-            0.01
+            0.1
         )
 
 
@@ -477,6 +505,10 @@ if __name__ == "__main__":
         # ====================================================
         # 3. VDD × Vb × Vin の全組み合わせを実行
         # ====================================================
+
+        # 計測開始
+        start_time = time.perf_counter()
+        num_iterations = 0
 
         for vdd in vdd_sweep:
 
@@ -490,6 +522,7 @@ if __name__ == "__main__":
 
                     vin = round(float(vin), 2)
 
+                    num_iterations += 1
 
                     print(
                         f"\n"
@@ -570,18 +603,46 @@ if __name__ == "__main__":
                                 f"SUCCESS: "
                                 f"Vout = {vout:.6g} V, Av = {vout/vin:.6g}"
                             )
-                            print(f"M1: id = {data["m.xm1.m0"]["id"]}A, vds = {data["m.xm1.m0"]["vds"]:.4f}V, vdsat = {data["m.xm1.m0"]["vdsat"]:.4f}V, vgs = {data['m.xm1.m0']["vgs"]}V, vth = {data['m.xm1.m0']["vth"]:.4f}")
-                            print(f"M2: id = {data["m.xm2.m0"]["id"]}A, vds = {data["m.xm2.m0"]["vds"]:.4f}V, vdsat = {data["m.xm2.m0"]["vdsat"]:.4f}V, vgs = {data['m.xm2.m0']["vgs"]}V, vth = {data['m.xm2.m0']["vth"]:.4f}")
+                            row = {
+                                "VDD_V": vdd,
+                                "Vb_V": vb,
+                                "Vin_V": vin,
+                                "Vout_V": vout,
+                                "Av": vout / vin
+                            }
+
+                            all_sat = True
+
+                            for transistor in sorted(data):
+
+                                params = data[transistor]
+                                sat = is_saturated(params)
+                                name = transistor.replace("XM", "M")
+
+                                for p in DEVICE_PARAMS:
+                                    row[f"{name}_{p}"] = params.get(p)
+
+                                row[f"{name}_sat"] = (
+                                    None if sat is None else int(sat)
+                                )
+
+                                if not sat:
+                                    all_sat = False
+
+                                print(
+                                    f"{name}: id = {params.get('id')}A, "
+                                    f"vds = {params.get('vds')}V, "
+                                    f"vdsat = {params.get('vdsat')}V, "
+                                    f"vgs = {params.get('vgs')}V, "
+                                    f"vth = {params.get('vth')}V, "
+                                    f"sat = {sat}"
+                                )
+
+                            row["all_sat"] = int(bool(data) and all_sat)
 
                             # print(stdout)
 
-                            results.append([
-                                vdd,
-                                vb,
-                                vin,
-                                vout,
-                                vout/vin
-                            ])
+                            results.append(row)
 
                         else:
 
@@ -602,6 +663,13 @@ if __name__ == "__main__":
                         os.remove(work_spice)
 
 
+        # 計測終了
+        elapsed_time = time.perf_counter() - start_time
+
+        hours, rem = divmod(elapsed_time, 3600)
+        minutes, seconds = divmod(rem, 60)
+
+
         # ====================================================
         # 4. CSV保存
         # ====================================================
@@ -618,16 +686,22 @@ if __name__ == "__main__":
             newline=""
         ) as f:
 
-            writer = csv.writer(f)
+            # 全行のキーを出現順に集めてヘッダにする
+            fieldnames = []
 
-            writer.writerow([
-                "VDD_V",
-                "Vb_V",
-                "Vin_V",
-                "Vout_V",
-                "Av"
-            ])
+            for row in results:
+                for key in row:
+                    if key not in fieldnames:
+                        fieldnames.append(key)
 
+            # all_sat は末尾に置く
+            if "all_sat" in fieldnames:
+                fieldnames.remove("all_sat")
+                fieldnames.append("all_sat")
+
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+
+            writer.writeheader()
             writer.writerows(results)
 
 
@@ -636,8 +710,20 @@ if __name__ == "__main__":
         print(csv_path)
         print(
             f"Number of successful simulations: "
-            f"{len(results)}"
+            f"{len(results)} / {num_iterations}"
         )
+        print(
+            f"Total simulation time: "
+            f"{int(hours):02d}:{int(minutes):02d}:{seconds:05.2f} "
+            f"({elapsed_time:.2f} s)"
+        )
+
+        if num_iterations > 0:
+            print(
+                f"Average time per iteration: "
+                f"{elapsed_time / num_iterations:.3f} s"
+            )
+
         print("====================================")
 
 
