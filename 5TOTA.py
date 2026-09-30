@@ -261,18 +261,18 @@ def is_saturated(params):
 
     return on and sat
 
-def simulate_point(template_content, vb, vdd, vin):
+def simulate_point(template_content, vb, vin):
     """
-    1つの (Vb, VDD, Vin) についてネットリスト作成 → ngspice実行 → 解析を行う。
+    1つの (Vb, Vin) についてネットリスト作成 → ngspice実行 → 解析を行う。
     並列実行時に表示が混ざらないよう、ログは文字列で返す。
 
     戻り値: (row または None, ログ文字列)
     """
-    label = f"Vb = {vb:.2f}, VDD = {vdd:.2f}V, Vin = {vin:.2f}V"
+    label = f"Vb = {vb:.2f}, Vin = {vin:.2f}V"
     log = []
 
     # 条件ごとにファイル名が異なるので並列でも衝突しない
-    work_spice = os.path.join(NETLIST_DIR, f"5tota_vb_{vb:.2f}_vdd_{vdd:.2f}_vin_{vin:.2f}.spice")
+    work_spice = os.path.join(NETLIST_DIR, f"5tota_vb_{vb:.2f}_vin_{vin:.2f}.spice")
 
     try:
         # テンプレートから作業用ネットリストを作成
@@ -280,7 +280,7 @@ def simulate_point(template_content, vb, vdd, vin):
             dst.write(template_content)
 
         # パラメータ書き換え
-        modify_netlist_params(work_spice, vdd_val=vdd, vb_val=vb, vin_val=vin)
+        modify_netlist_params(work_spice, vb_val=vb, vin_val=vin)
 
         # シミュレーション実行
         success, stdout = run_ngspice(work_spice)
@@ -303,7 +303,6 @@ def simulate_point(template_content, vb, vdd, vin):
 
         row = {
             "Vb_V": vb,
-            "VDD_V": vdd,
             "Vin_V": vin,
             "gain_dc_dB": gain_value
         }
@@ -351,9 +350,9 @@ if __name__ == "__main__":
     if spice_template and os.path.exists(spice_template):
         print(f"Base netlist generated: {spice_template}")
 
-        vdd_sweep = np.arange(3.3, 4.0, 0.1)
+        # VDD は回路図の設定値 (.param vdd=3.3) をそのまま使うので、Vin はその範囲内
         vb_sweep = np.arange(0.6, 1.5, 0.05)
-        vin_sweep = np.arange(0.1, 4.0, 0.1)
+        vin_sweep = np.arange(0.1, 3.4, 0.1)
         results = []
 
         # 並列数 (環境変数 NUM_WORKERS で変更可能。既定はCPUコア数)
@@ -363,20 +362,12 @@ if __name__ == "__main__":
         with open(spice_template, 'r') as src:
             template_content = src.read()
 
-        # 全条件の組み合わせ (入力が電源電圧を超える条件は飛ばす)
-        conditions = []
-
-        for vb in vb_sweep:
-            vb = round(float(vb), 2)
-            for vdd in vdd_sweep:
-                vdd = round(float(vdd), 2)
-                for vin in vin_sweep:
-                    vin = round(float(vin), 2)
-
-                    if vin > vdd:
-                        continue
-
-                    conditions.append((vb, vdd, vin))
+        # 全条件の組み合わせ
+        conditions = [
+            (round(float(vb), 2), round(float(vin), 2))
+            for vb in vb_sweep
+            for vin in vin_sweep
+        ]
 
         num_iterations = len(conditions)
         print(f"Total conditions: {num_iterations}, workers: {num_workers}")
@@ -388,8 +379,8 @@ if __name__ == "__main__":
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
 
             futures = [
-                executor.submit(simulate_point, template_content, vb, vdd, vin)
-                for vb, vdd, vin in conditions
+                executor.submit(simulate_point, template_content, vb, vin)
+                for vb, vin in conditions
             ]
 
             for done, future in enumerate(as_completed(futures), 1):
@@ -407,7 +398,7 @@ if __name__ == "__main__":
                     results.append(row)
 
         # 完了順はバラバラなので、条件順に並べ直す
-        results.sort(key=lambda r: (r["Vb_V"], r["VDD_V"], r["Vin_V"]))
+        results.sort(key=lambda r: (r["Vb_V"], r["Vin_V"]))
 
         # 計測終了
         elapsed_time = time.perf_counter() - start_time

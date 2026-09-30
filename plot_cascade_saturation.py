@@ -101,7 +101,7 @@ def shade_saturation(ax, vin, mask):
 # 条件ごとの詳細図
 # ============================================================
 
-def plot_detail(sub, vdd, vb, transistors):
+def plot_detail(sub, vb, transistors):
 
     sub = sub.sort_values("Vin_V")
 
@@ -125,7 +125,7 @@ def plot_detail(sub, vdd, vb, transistors):
     ax.plot(vin, vout, color="black")
     ax.set_ylabel("Vout [V]")
     ax.set_title(
-        f"Cascade  VDD = {vdd:.2f} V, Vb = {vb:.2f} V"
+        f"Cascade  Vb = {vb:.2f} V"
     )
     ax.legend(loc="best")
     ax.grid(True, alpha=0.3)
@@ -160,7 +160,7 @@ def plot_detail(sub, vdd, vb, transistors):
 
     path = os.path.join(
         DETAIL_DIR,
-        f"cascade_sat_vdd_{vdd:.2f}_vb_{vb:.2f}.png"
+        f"cascade_sat_vb_{vb:.2f}.png"
     )
 
     fig.savefig(path, dpi=300, bbox_inches="tight")
@@ -169,7 +169,7 @@ def plot_detail(sub, vdd, vb, transistors):
     # 飽和区間を表示
     ranges = saturated_ranges(vin, mask)
 
-    print(f"\nVDD = {vdd:.2f} V, Vb = {vb:.2f} V")
+    print(f"\nVb = {vb:.2f} V")
 
     if ranges:
 
@@ -189,47 +189,36 @@ def plot_detail(sub, vdd, vb, transistors):
 
 
 # ============================================================
-# Vb × Vin の飽和マップ (VDDごと)
+# Vb × Vin の飽和マップ
 # ============================================================
 
 def plot_summary(df):
 
-    vdd_list = sorted(df["VDD_V"].unique())
+    fig, ax = plt.subplots(figsize=(6, 5))
 
-    fig, axes = plt.subplots(
-        1,
-        len(vdd_list),
-        figsize=(6 * len(vdd_list), 5),
-        squeeze=False
+    grid = df.pivot_table(
+        index="Vb_V",
+        columns="Vin_V",
+        values="all_sat",
+        aggfunc="max"
     )
 
-    for ax, vdd in zip(axes[0], vdd_list):
+    vin = grid.columns.to_numpy()
+    vb = grid.index.to_numpy()
 
-        sub = df[df["VDD_V"] == vdd]
+    ax.pcolormesh(
+        vin,
+        vb,
+        grid.to_numpy(),
+        cmap="Greens",
+        vmin=0,
+        vmax=1.5,
+        shading="nearest"
+    )
 
-        grid = sub.pivot_table(
-            index="Vb_V",
-            columns="Vin_V",
-            values="all_sat",
-            aggfunc="max"
-        )
-
-        vin = grid.columns.to_numpy()
-        vb = grid.index.to_numpy()
-
-        ax.pcolormesh(
-            vin,
-            vb,
-            grid.to_numpy(),
-            cmap="Greens",
-            vmin=0,
-            vmax=1.5,
-            shading="nearest"
-        )
-
-        ax.set_xlabel("Vin [V]")
-        ax.set_ylabel("Vb [V]")
-        ax.set_title(f"All saturated (VDD = {vdd:.2f} V)")
+    ax.set_xlabel("Vin [V]")
+    ax.set_ylabel("Vb [V]")
+    ax.set_title("All saturated")
 
     fig.tight_layout()
     fig.savefig(SUMMARY_PATH, dpi=300, bbox_inches="tight")
@@ -257,9 +246,9 @@ if __name__ == "__main__":
 
     os.makedirs(DETAIL_DIR, exist_ok=True)
 
-    for (vdd, vb), sub in df.groupby(["VDD_V", "Vb_V"]):
-        plot_detail(sub, vdd, vb, transistors)
+    for vb, sub in df.groupby("Vb_V"):
+        plot_detail(sub, vb, transistors)
 
-    # Vb または VDD を掃引しているときだけ全体マップを描く
-    if df["Vb_V"].nunique() > 1 or df["VDD_V"].nunique() > 1:
+    # Vb を掃引しているときだけ全体マップを描く
+    if df["Vb_V"].nunique() > 1:
         plot_summary(df)

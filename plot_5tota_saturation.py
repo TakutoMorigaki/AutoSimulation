@@ -94,24 +94,12 @@ def draw_grid(ax, grid, cmap, vmin, vmax):
 
 
 # ============================================================
-# 1. VDDごとの飽和マップ (飽和領域を DC Gain で色付け)
+# 1. 飽和マップ (飽和領域を DC Gain で色付け)
 # ============================================================
 
 def plot_saturation_map(df):
 
-    vdd_list = sorted(df["VDD_V"].unique())
-
-    ncols = min(4, len(vdd_list))
-    nrows = int(np.ceil(len(vdd_list) / ncols))
-
-    fig, axes = plt.subplots(
-        nrows,
-        ncols,
-        figsize=(4.2 * ncols, 3.6 * nrows),
-        sharex=True,
-        sharey=True,
-        squeeze=False
-    )
+    fig, ax = plt.subplots(figsize=(6, 4.5))
 
     sat = df[df["all_sat"] == 1]
     vmin = sat["gain_dc_dB"].min()
@@ -124,32 +112,19 @@ def plot_saturation_map(df):
     )
     cmap.set_bad(UNSAT_COLOR)
 
-    image = None
+    sub = df.copy()
+    sub["gain_sat"] = sub["gain_dc_dB"].where(sub["all_sat"] == 1)
 
-    for ax, vdd in zip(axes.flat, vdd_list):
+    image = draw_grid(ax, to_grid(sub, "gain_sat"), cmap, vmin, vmax)
 
-        sub = df[df["VDD_V"] == vdd].copy()
-        sub["gain_sat"] = sub["gain_dc_dB"].where(sub["all_sat"] == 1)
+    ax.set_xlabel("Vin [V]")
+    ax.set_ylabel("Vb [V]")
 
-        image = draw_grid(ax, to_grid(sub, "gain_sat"), cmap, vmin, vmax)
-
-        ax.set_title(f"VDD = {vdd:.1f} V")
-
-    # 余ったサブプロットは消す
-    for ax in axes.flat[len(vdd_list):]:
-        ax.set_visible(False)
-
-    for ax in axes[-1]:
-        ax.set_xlabel("Vin [V]")
-
-    for ax in axes[:, 0]:
-        ax.set_ylabel("Vb [V]")
-
-    cbar = fig.colorbar(image, ax=axes, shrink=0.8)
+    cbar = fig.colorbar(image, ax=ax)
     cbar.set_label("DC Gain [dB] (all transistors saturated)")
 
-    fig.suptitle(
-        "5T OTA saturation region "
+    ax.set_title(
+        "5T OTA saturation region\n"
         "(gray: at least one transistor not saturated, white: not simulated)"
     )
 
@@ -160,7 +135,7 @@ def plot_saturation_map(df):
 
 
 # ============================================================
-# 2. トランジスタ別の飽和マップ (VDDごとに1枚)
+# 2. トランジスタ別の飽和マップ
 # ============================================================
 
 def plot_by_transistor(df, transistors):
@@ -172,43 +147,37 @@ def plot_by_transistor(df, transistors):
 
     panels = transistors + ["all"]
 
-    for vdd in sorted(df["VDD_V"].unique()):
+    fig, axes = plt.subplots(
+        1,
+        len(panels),
+        figsize=(3.2 * len(panels), 3.4),
+        sharex=True,
+        sharey=True
+    )
 
-        sub = df[df["VDD_V"] == vdd]
+    for ax, name in zip(axes, panels):
 
-        fig, axes = plt.subplots(
-            1,
-            len(panels),
-            figsize=(3.2 * len(panels), 3.4),
-            sharex=True,
-            sharey=True
-        )
+        col = "all_sat" if name == "all" else f"{name}_sat"
 
-        for ax, name in zip(axes, panels):
+        draw_grid(ax, to_grid(df, col), cmap, 0, 1)
 
-            col = "all_sat" if name == "all" else f"{name}_sat"
+        ax.set_title("All" if name == "all" else name)
+        ax.set_xlabel("Vin [V]")
 
-            draw_grid(ax, to_grid(sub, col), cmap, 0, 1)
+    axes[0].set_ylabel("Vb [V]")
 
-            ax.set_title("All" if name == "all" else name)
-            ax.set_xlabel("Vin [V]")
+    fig.suptitle("Saturated region per transistor (blue: saturated)")
+    fig.tight_layout()
 
-        axes[0].set_ylabel("Vb [V]")
+    path = os.path.join(
+        DETAIL_DIR,
+        "5tota_sat_by_transistor.png"
+    )
 
-        fig.suptitle(
-            f"Saturated region per transistor (VDD = {vdd:.1f} V, blue: saturated)"
-        )
-        fig.tight_layout()
+    fig.savefig(path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
 
-        path = os.path.join(
-            DETAIL_DIR,
-            f"5tota_sat_by_transistor_vdd_{vdd:.2f}.png"
-        )
-
-        fig.savefig(path, dpi=300, bbox_inches="tight")
-        plt.close(fig)
-
-    print(f"Per-transistor maps saved: {DETAIL_DIR}")
+    print(f"Per-transistor map saved: {path}")
 
 
 # ============================================================
@@ -220,15 +189,10 @@ def plot_vin_range(df):
     sat = df[df["all_sat"] == 1]
 
     vin_range = (
-        sat.groupby(["VDD_V", "Vb_V"])["Vin_V"]
+        sat.groupby("Vb_V")["Vin_V"]
         .agg(["min", "max"])
         .reset_index()
     )
-
-    vdd_list = sorted(vin_range["VDD_V"].unique())
-
-    # VDDは大小のある量なので、単色の濃淡で表す (低い:薄い → 高い:濃い)
-    colors = plt.get_cmap("Blues")(np.linspace(0.35, 1.0, len(vdd_list)))
 
     fig, axes = plt.subplots(
         1,
@@ -238,12 +202,8 @@ def plot_vin_range(df):
         sharey=True
     )
 
-    for vdd, color in zip(vdd_list, colors):
-
-        sub = vin_range[vin_range["VDD_V"] == vdd]
-
-        axes[0].plot(sub["Vb_V"], sub["min"], color=color, linewidth=2, marker="o", markersize=4, label=f"{vdd:.1f} V")
-        axes[1].plot(sub["Vb_V"], sub["max"], color=color, linewidth=2, marker="o", markersize=4, label=f"{vdd:.1f} V")
+    axes[0].plot(vin_range["Vb_V"], vin_range["min"], color="#2a6fb0", linewidth=2, marker="o", markersize=4)
+    axes[1].plot(vin_range["Vb_V"], vin_range["max"], color="#2a6fb0", linewidth=2, marker="o", markersize=4)
 
     axes[0].set_title("Lower limit of saturated Vin")
     axes[1].set_title("Upper limit of saturated Vin")
@@ -253,7 +213,6 @@ def plot_vin_range(df):
         ax.grid(True, alpha=0.3)
 
     axes[0].set_ylabel("Vin [V]")
-    axes[1].legend(title="VDD", loc="center left", bbox_to_anchor=(1.02, 0.5))
 
     fig.tight_layout()
     fig.savefig(RANGE_PATH, dpi=300, bbox_inches="tight")
@@ -273,7 +232,7 @@ if __name__ == "__main__":
     df = pd.read_csv(CSV_PATH)
 
     # 浮動小数点の誤差を丸める
-    for col in ["Vb_V", "VDD_V", "Vin_V"]:
+    for col in ["Vb_V", "Vin_V"]:
         df[col] = df[col].round(3)
 
     transistors = get_transistors(df)
@@ -291,6 +250,6 @@ if __name__ == "__main__":
 
     for _, r in vin_range.iterrows():
         print(
-            f"  VDD = {r['VDD_V']:.1f} V, Vb = {r['Vb_V']:.2f} V: "
+            f"  Vb = {r['Vb_V']:.2f} V: "
             f"{r['min']:.2f} ~ {r['max']:.2f}"
         )

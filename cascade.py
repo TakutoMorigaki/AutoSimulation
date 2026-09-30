@@ -449,9 +449,9 @@ def is_saturated(params):
 # 1条件分のシミュレーション (並列実行の単位)
 # ============================================================
 
-def simulate_point(template_content, vdd, vb, vin):
+def simulate_point(template_content, vb, vin):
     """
-    1つの (VDD, Vb, Vin) についてネットリスト作成 → ngspice実行 → 解析を行う。
+    1つの (Vb, Vin) についてネットリスト作成 → ngspice実行 → 解析を行う。
     並列実行時に表示が混ざらないよう、ログは文字列で返す。
 
     戻り値: (row または None, ログ文字列)
@@ -459,7 +459,6 @@ def simulate_point(template_content, vdd, vb, vin):
 
     log = [
         f"====================================\n"
-        f"VDD = {vdd:.2f} V\n"
         f"Vb  = {vb:.2f} V\n"
         f"Vin = {vin:.2f} V\n"
         f"===================================="
@@ -474,7 +473,6 @@ def simulate_point(template_content, vdd, vb, vin):
         NETLIST_DIR,
         (
             f"cascade_"
-            f"vdd_{vdd:.2f}_"
             f"vb_{vb:.2f}_"
             f"vin_{vin:.2f}.spice"
         )
@@ -491,7 +489,6 @@ def simulate_point(template_content, vdd, vb, vin):
         # .paramを書き換える
         modify_netlist_params(
             work_spice,
-            vdd_val=vdd,
             vb_val=vb,
             vin_val=vin
         )
@@ -517,7 +514,6 @@ def simulate_point(template_content, vdd, vb, vin):
         )
 
         row = {
-            "VDD_V": vdd,
             "Vb_V": vb,
             "Vin_V": vin,
             "Vout_V": vout,
@@ -593,12 +589,7 @@ if __name__ == "__main__":
         # 2. 掃引条件
         # ====================================================
 
-        # VDD
-        vdd_sweep = np.arange(
-            1.0,
-            5.0,
-            0.1
-        )
+        # VDD は回路図の設定値 (.param vdd) をそのまま使う
 
         # Vb
         vb_sweep = np.arange(
@@ -627,11 +618,9 @@ if __name__ == "__main__":
         # 全条件の組み合わせ
         conditions = [
             (
-                round(float(vdd), 2),
                 round(float(vb), 2),
                 round(float(vin), 2)
             )
-            for vdd in vdd_sweep
             for vb in vb_sweep
             for vin in vin_sweep
         ]
@@ -643,7 +632,7 @@ if __name__ == "__main__":
 
 
         # ====================================================
-        # 3. VDD × Vb × Vin の全組み合わせを並列実行
+        # 3. Vb × Vin の全組み合わせを並列実行
         # ====================================================
 
         print(
@@ -661,11 +650,10 @@ if __name__ == "__main__":
                 executor.submit(
                     simulate_point,
                     template_content,
-                    vdd,
                     vb,
                     vin
                 )
-                for vdd, vb, vin in conditions
+                for vb, vin in conditions
             ]
 
             for done, future in enumerate(as_completed(futures), 1):
@@ -687,7 +675,7 @@ if __name__ == "__main__":
 
         # 完了順はバラバラなので、条件順に並べ直す
         results.sort(
-            key=lambda r: (r["VDD_V"], r["Vb_V"], r["Vin_V"])
+            key=lambda r: (r["Vb_V"], r["Vin_V"])
         )
 
 
