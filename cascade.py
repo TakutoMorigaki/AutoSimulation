@@ -148,8 +148,8 @@ def modify_netlist_params(
         vdd_val=None,
         vb_val=None,
         vin_val=None,
-        w_val=None,
-        wtail_val=None,
+        w1_val=None,
+        w2_val=None,
         l_val=None
     ):
     """
@@ -215,25 +215,25 @@ def modify_netlist_params(
 
 
     # --------------------------------------------------------
-    # W
+    # W (M1, M2 は別々に指定する)
     # --------------------------------------------------------
 
-    if w_val is not None:
+    if w1_val is not None:
 
-        # M1
         content = replace_mos_parameter(
             content,
             "XM1",
             "W",
-            w_val
+            w1_val
         )
 
-        # M2
+    if w2_val is not None:
+
         content = replace_mos_parameter(
             content,
             "XM2",
             "W",
-            w_val
+            w2_val
         )
 
 
@@ -449,9 +449,9 @@ def is_saturated(params):
 # 1条件分のシミュレーション (並列実行の単位)
 # ============================================================
 
-def simulate_point(template_content, vb, vin):
+def simulate_point(template_content, w1, w2, vb, vin):
     """
-    1つの (Vb, Vin) についてネットリスト作成 → ngspice実行 → 解析を行う。
+    1つの (W1, W2, Vb, Vin) についてネットリスト作成 → ngspice実行 → 解析を行う。
     並列実行時に表示が混ざらないよう、ログは文字列で返す。
 
     戻り値: (row または None, ログ文字列)
@@ -459,6 +459,7 @@ def simulate_point(template_content, vb, vin):
 
     log = [
         f"====================================\n"
+        f"W1  = {w1} um, W2 = {w2} um\n"
         f"Vb  = {vb:.2f} V\n"
         f"Vin = {vin:.2f} V\n"
         f"===================================="
@@ -473,6 +474,8 @@ def simulate_point(template_content, vb, vin):
         NETLIST_DIR,
         (
             f"cascade_"
+            f"w1_{w1}_"
+            f"w2_{w2}_"
             f"vb_{vb:.2f}_"
             f"vin_{vin:.2f}.spice"
         )
@@ -490,7 +493,9 @@ def simulate_point(template_content, vb, vin):
         modify_netlist_params(
             work_spice,
             vb_val=vb,
-            vin_val=vin
+            vin_val=vin,
+            w1_val=w1,
+            w2_val=w2
         )
 
         # ngspice実行
@@ -514,6 +519,8 @@ def simulate_point(template_content, vb, vin):
         )
 
         row = {
+            "W1_um": w1,
+            "W2_um": w2,
             "Vb_V": vb,
             "Vin_V": vin,
             "Vout_V": vout,
@@ -591,6 +598,10 @@ if __name__ == "__main__":
 
         # VDD は回路図の設定値 (.param vdd) をそのまま使う
 
+        # W [um] (M1, M2 それぞれ独立に振る)
+        w1_list = [5.6, 11.2, 22.4, 44.8]
+        w2_list = [5.6, 11.2, 22.4, 44.8]
+
         # Vb
         vb_sweep = np.arange(
             0.5,
@@ -618,9 +629,13 @@ if __name__ == "__main__":
         # 全条件の組み合わせ
         conditions = [
             (
+                w1,
+                w2,
                 round(float(vb), 2),
                 round(float(vin), 2)
             )
+            for w1 in w1_list
+            for w2 in w2_list
             for vb in vb_sweep
             for vin in vin_sweep
         ]
@@ -632,7 +647,7 @@ if __name__ == "__main__":
 
 
         # ====================================================
-        # 3. Vb × Vin の全組み合わせを並列実行
+        # 3. W1 × W2 × Vb × Vin の全組み合わせを並列実行
         # ====================================================
 
         print(
@@ -650,10 +665,12 @@ if __name__ == "__main__":
                 executor.submit(
                     simulate_point,
                     template_content,
+                    w1,
+                    w2,
                     vb,
                     vin
                 )
-                for vb, vin in conditions
+                for w1, w2, vb, vin in conditions
             ]
 
             for done, future in enumerate(as_completed(futures), 1):
@@ -675,7 +692,7 @@ if __name__ == "__main__":
 
         # 完了順はバラバラなので、条件順に並べ直す
         results.sort(
-            key=lambda r: (r["Vb_V"], r["Vin_V"])
+            key=lambda r: (r["W1_um"], r["W2_um"], r["Vb_V"], r["Vin_V"])
         )
 
 
