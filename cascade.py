@@ -595,14 +595,14 @@ if __name__ == "__main__":
         vb_sweep = np.arange(
             0.5,
             3.0,
-            0.1
+            0.02
         )
 
         # Vin
         vin_sweep = np.arange(
             0.3,
             1.7,
-            0.1
+            0.02
         )
 
 

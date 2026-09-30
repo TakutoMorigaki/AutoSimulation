@@ -138,16 +138,16 @@ def modify_netlist_params(
         wtail_value = 2.0 * w_val
 
         # M1
-        content = replace_mos_parameter(content, "XM1", "W", wp_value)
+        content = replace_mos_parameter(content, "XM1", "W", wn_value)
 
         # M2
-        content = replace_mos_parameter(content, "XM2", "W", wp_value)
+        content = replace_mos_parameter(content, "XM2", "W", wn_value)
 
         # M3
-        content = replace_mos_parameter(content, "XM3", "W", wn_value)
+        content = replace_mos_parameter(content, "XM3", "W", wp_value)
 
         # M4
-        content = replace_mos_parameter(content, "XM4", "W", wn_value)
+        content = replace_mos_parameter(content, "XM4", "W", wp_value)
 
         # M5
         content = replace_mos_parameter(content, "XM5", "W", wtail_value)
@@ -351,8 +351,8 @@ if __name__ == "__main__":
         print(f"Base netlist generated: {spice_template}")
 
         # VDD は回路図の設定値 (.param vdd=3.3) をそのまま使うので、Vin はその範囲内
-        vb_sweep = np.arange(0.6, 1.5, 0.05)
-        vin_sweep = np.arange(0.1, 3.4, 0.1)
+        vb_sweep = np.arange(0.6, 1.5, 0.02)
+        vin_sweep = np.arange(0.1, 3.4, 0.02)
         results = []
 
         # 並列数 (環境変数 NUM_WORKERS で変更可能。既定はCPUコア数)

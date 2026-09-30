@@ -141,7 +141,7 @@ def modify_netlist_params(
             content,
             "XM1",
             "W",
-            wp_value
+            wn_value
         )
 
         # M2
@@ -149,7 +149,7 @@ def modify_netlist_params(
             content,
             "XM2",
             "W",
-            wp_value
+            wn_value
         )
 
         # M3
@@ -157,7 +157,7 @@ def modify_netlist_params(
             content,
             "XM3",
             "W",
-            wn_value
+            wp_value
         )
 
         # M4
@@ -165,7 +165,7 @@ def modify_netlist_params(
             content,
             "XM4",
             "W",
-            wn_value
+            wp_value
         )
 
         # M5

@@ -24,14 +24,14 @@ CSV_PATH = os.path.join(
     "cascade_results.csv"
 )
 
-# 条件ごとの詳細図の保存先
+# 図の保存先
 DETAIL_DIR = os.path.join(
     STUDY_DIR,
     "cascade_saturation"
 )
 
 SUMMARY_PATH = os.path.join(
-    STUDY_DIR,
+    DETAIL_DIR,
     "cascade_saturation_map.png"
 )
 
@@ -82,6 +82,57 @@ def saturated_ranges(vin, mask):
     return ranges
 
 
+def add_gain(df):
+    """
+    Vbごとに小信号ゲイン dVout/dVin を計算し、gain 列として追加する
+    """
+
+    df = df.sort_values(["Vb_V", "Vin_V"]).copy()
+
+    df["gain"] = 0.0
+
+    for _, s in df.groupby("Vb_V"):
+
+        if len(s) > 1:
+            df.loc[s.index, "gain"] = np.gradient(
+                s["Vout_V"].to_numpy(),
+                s["Vin_V"].to_numpy()
+            )
+
+    return df
+
+
+def find_max_gain(df):
+    """
+    全トランジスタが飽和している点のうち、|gain| が最大の行を返す
+    (飽和点がなければ None)
+    """
+
+    sat = df[df["all_sat"] == 1]
+
+    if sat.empty:
+        return None
+
+    return sat.loc[sat["gain"].abs().idxmax()]
+
+
+def mark_max_gain(ax, best, x, y):
+
+    ax.plot(
+        best[x],
+        best[y],
+        marker="*",
+        markersize=14,
+        color="tab:red",
+        markeredgecolor="white",
+        linestyle="none",
+        label=(
+            f"Max |gain| {abs(best['gain']):.3g} V/V\n"
+            f"(Vin = {best['Vin_V']:.2f} V, Vb = {best['Vb_V']:.2f} V)"
+        )
+    )
+
+
 def shade_saturation(ax, vin, mask):
 
     ax.fill_between(
@@ -109,8 +160,8 @@ def plot_detail(sub, vb, transistors):
     vout = sub["Vout_V"].to_numpy()
     mask = sub["all_sat"].to_numpy().astype(bool)
 
-    # 小信号ゲイン dVout/dVin
-    gain = np.gradient(vout, vin) if len(vin) > 1 else np.zeros_like(vin)
+    # 小信号ゲイン dVout/dVin (add_gain で計算済み)
+    gain = sub["gain"].to_numpy()
 
     fig, axes = plt.subplots(
         3,
@@ -152,6 +203,14 @@ def plot_detail(sub, vb, transistors):
     ax = axes[2]
     shade_saturation(ax, vin, mask)
     ax.plot(vin, gain, color="tab:blue")
+
+    # 飽和区間内で |gain| が最大となる点
+    best = find_max_gain(sub)
+
+    if best is not None:
+        mark_max_gain(ax, best, "Vin_V", "gain")
+        ax.legend(loc="best", fontsize=8)
+
     ax.set_ylabel("dVout/dVin [V/V]")
     ax.set_xlabel("Vin [V]")
     ax.grid(True, alpha=0.3)
@@ -216,6 +275,13 @@ def plot_summary(df):
         shading="nearest"
     )
 
+    # 飽和領域全体で |gain| が最大となる点
+    best = find_max_gain(df)
+
+    if best is not None:
+        mark_max_gain(ax, best, "Vin_V", "Vb_V")
+        ax.legend(loc="best", fontsize=8)
+
     ax.set_xlabel("Vin [V]")
     ax.set_ylabel("Vb [V]")
     ax.set_title("All saturated")
@@ -240,6 +306,8 @@ if __name__ == "__main__":
             "最新の cascade.py でシミュレーションし直してください。"
         )
 
+    df = add_gain(df)
+
     transistors = get_transistors(df)
 
     print(f"Transistors: {transistors}")
@@ -252,3 +320,16 @@ if __name__ == "__main__":
     # Vb を掃引しているときだけ全体マップを描く
     if df["Vb_V"].nunique() > 1:
         plot_summary(df)
+
+    # 利得が最大となる点を表示
+    best = find_max_gain(df)
+
+    print()
+
+    if best is not None:
+        print(
+            f"Max |gain| (all saturated): {abs(best['gain']):.4g} V/V "
+            f"at Vb = {best['Vb_V']:.2f} V, Vin = {best['Vin_V']:.2f} V"
+        )
+    else:
+        print("No all-saturated point")

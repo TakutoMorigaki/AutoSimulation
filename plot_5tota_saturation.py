@@ -25,19 +25,19 @@ CSV_PATH = os.path.join(
     "5tota_saturation_results.csv"
 )
 
-# トランジスタ別の図の保存先
+# 図の保存先
 DETAIL_DIR = os.path.join(
     STUDY_DIR,
     "5tota_saturation"
 )
 
 MAP_PATH = os.path.join(
-    STUDY_DIR,
+    DETAIL_DIR,
     "5tota_saturation_map.png"
 )
 
 RANGE_PATH = os.path.join(
-    STUDY_DIR,
+    DETAIL_DIR,
     "5tota_saturation_vin_range.png"
 )
 
@@ -80,6 +80,20 @@ def to_grid(sub, value):
     )
 
 
+def find_max_gain(df):
+    """
+    全トランジスタが飽和している点のうち、DC Gain が最大の行を返す
+    (飽和点がなければ None)
+    """
+
+    sat = df[df["all_sat"] == 1]
+
+    if sat.empty:
+        return None
+
+    return sat.loc[sat["gain_dc_dB"].idxmax()]
+
+
 def draw_grid(ax, grid, cmap, vmin, vmax):
 
     return ax.pcolormesh(
@@ -116,6 +130,27 @@ def plot_saturation_map(df):
     sub["gain_sat"] = sub["gain_dc_dB"].where(sub["all_sat"] == 1)
 
     image = draw_grid(ax, to_grid(sub, "gain_sat"), cmap, vmin, vmax)
+
+    # 飽和領域内で利得が最大となる点
+    best = find_max_gain(df)
+
+    if best is not None:
+
+        ax.plot(
+            best["Vin_V"],
+            best["Vb_V"],
+            marker="*",
+            markersize=14,
+            color="tab:red",
+            markeredgecolor="white",
+            linestyle="none",
+            label=(
+                f"Max gain {best['gain_dc_dB']:.2f} dB\n"
+                f"(Vin = {best['Vin_V']:.2f} V, Vb = {best['Vb_V']:.2f} V)"
+            )
+        )
+
+        ax.legend(loc="best", fontsize=8)
 
     ax.set_xlabel("Vin [V]")
     ax.set_ylabel("Vb [V]")
@@ -240,6 +275,8 @@ if __name__ == "__main__":
     print(f"Transistors: {transistors}")
     print(f"Conditions: {len(df)}, all saturated: {int(df['all_sat'].sum())}")
 
+    os.makedirs(DETAIL_DIR, exist_ok=True)
+
     plot_saturation_map(df)
     plot_by_transistor(df, transistors)
     vin_range = plot_vin_range(df)
@@ -253,3 +290,16 @@ if __name__ == "__main__":
             f"  Vb = {r['Vb_V']:.2f} V: "
             f"{r['min']:.2f} ~ {r['max']:.2f}"
         )
+
+    # 利得が最大となる点を表示
+    best = find_max_gain(df)
+
+    print()
+
+    if best is not None:
+        print(
+            f"Max gain (all saturated): {best['gain_dc_dB']:.4f} dB "
+            f"at Vb = {best['Vb_V']:.2f} V, Vin = {best['Vin_V']:.2f} V"
+        )
+    else:
+        print("No all-saturated point")
