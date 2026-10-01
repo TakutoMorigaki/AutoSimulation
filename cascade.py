@@ -4,6 +4,8 @@ import re
 import numpy as np
 import csv
 import time
+import shutil
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
@@ -143,8 +145,23 @@ def replace_mos_parameter(
 # .param の変更
 # ============================================================
 
-def modify_netlist_params(
-        netlist_path,
+def modify_netlist_params(netlist_path, **kwargs):
+    """
+    ネットリストファイル内の各種パラメータを書き換える。
+    (引数は modify_netlist_content と同じ)
+    """
+
+    with open(netlist_path, "r") as f:
+        content = f.read()
+
+    content = modify_netlist_content(content, **kwargs)
+
+    with open(netlist_path, "w") as f:
+        f.write(content)
+
+
+def modify_netlist_content(
+        content,
         vdd_val=None,
         vb_val=None,
         vin_val=None,
@@ -153,11 +170,9 @@ def modify_netlist_params(
         l_val=None
     ):
     """
-    ネットリスト内の各種パラメータを書き換える。
+    ネットリストの文字列内の各種パラメータを書き換えて返す。
+    (ファイルを介さないので、並列実行時のファイル入出力を減らせる)
     """
-
-    with open(netlist_path, "r") as f:
-        content = f.read()
 
 
     # --------------------------------------------------------
@@ -256,12 +271,7 @@ def modify_netlist_params(
             )
 
 
-    # --------------------------------------------------------
-    # 保存
-    # --------------------------------------------------------
-
-    with open(netlist_path, "w") as f:
-        f.write(content)
+    return content
 
 
 # ============================================================
@@ -449,10 +459,13 @@ def is_saturated(params):
 # 1条件分のシミュレーション (並列実行の単位)
 # ============================================================
 
-def simulate_point(template_content, w1, w2, vb, vin):
+def simulate_point(template_content, work_dir, w1, w2, vb, vin):
     """
     1つの (W1, W2, Vb, Vin) についてネットリスト作成 → ngspice実行 → 解析を行う。
     並列実行時に表示が混ざらないよう、ログは文字列で返す。
+
+    作業用ネットリストは work_dir (コンテナ内の一時フォルダ) に作る。
+    Windows側のマウントフォルダに作ると、ファイル入出力の待ちで遅くなるため。
 
     戻り値: (row または None, ログ文字列)
     """
@@ -471,7 +484,7 @@ def simulate_point(template_content, w1, w2, vb, vin):
     # ----------------------------------------
 
     work_spice = os.path.join(
-        NETLIST_DIR,
+        work_dir,
         (
             f"cascade_"
             f"w1_{w1}_"
@@ -485,18 +498,17 @@ def simulate_point(template_content, w1, w2, vb, vin):
 
     try:
 
-        # テンプレートをコピー
-        with open(work_spice, "w") as dst:
-            dst.write(template_content)
-
-        # .paramを書き換える
-        modify_netlist_params(
-            work_spice,
+        # .param と W をメモリ上で書き換えてから、1回だけ書き込む
+        content = modify_netlist_content(
+            template_content,
             vb_val=vb,
             vin_val=vin,
             w1_val=w1,
             w2_val=w2
         )
+
+        with open(work_spice, "w") as dst:
+            dst.write(content)
 
         # ngspice実行
         success, stdout = run_ngspice(work_spice)
@@ -650,45 +662,61 @@ if __name__ == "__main__":
         # 3. W1 × W2 × Vb × Vin の全組み合わせを並列実行
         # ====================================================
 
+        # 作業用ネットリストはコンテナ内の一時フォルダ (/tmp/cascade_xxxx) に作る
+        # (環境変数 WORK_DIR で親フォルダを変更可能)
+        work_dir = tempfile.mkdtemp(
+            prefix="cascade_",
+            dir=os.environ.get("WORK_DIR")
+        )
+
         print(
             f"\nTotal conditions: {num_iterations}, "
-            f"workers: {num_workers}"
+            f"workers: {num_workers}\n"
+            f"Work directory: {work_dir}"
         )
 
         # 計測開始
         start_time = time.perf_counter()
 
-        # ngspiceは別プロセスで動くので、スレッドでも並列に実行される
-        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        try:
 
-            futures = [
-                executor.submit(
-                    simulate_point,
-                    template_content,
-                    w1,
-                    w2,
-                    vb,
-                    vin
-                )
-                for w1, w2, vb, vin in conditions
-            ]
+            # ngspiceは別プロセスで動くので、スレッドでも並列に実行される
+            with ThreadPoolExecutor(max_workers=num_workers) as executor:
 
-            for done, future in enumerate(as_completed(futures), 1):
+                futures = [
+                    executor.submit(
+                        simulate_point,
+                        template_content,
+                        work_dir,
+                        w1,
+                        w2,
+                        vb,
+                        vin
+                    )
+                    for w1, w2, vb, vin in conditions
+                ]
 
-                try:
-                    row, log = future.result()
-                except Exception as e:
-                    row, log = None, f"ERROR: {e}"
+                for done, future in enumerate(as_completed(futures), 1):
 
-                elapsed = time.perf_counter() - start_time
+                    try:
+                        row, log = future.result()
+                    except Exception as e:
+                        row, log = None, f"ERROR: {e}"
 
-                print(
-                    f"\n[{done}/{num_iterations}] "
-                    f"elapsed {elapsed:.1f} s\n{log}"
-                )
+                    elapsed = time.perf_counter() - start_time
 
-                if row is not None:
-                    results.append(row)
+                    print(
+                        f"\n[{done}/{num_iterations}] "
+                        f"elapsed {elapsed:.1f} s\n{log}"
+                    )
+
+                    if row is not None:
+                        results.append(row)
+
+        finally:
+
+            # 途中で止めた場合も一時フォルダを消す
+            shutil.rmtree(work_dir, ignore_errors=True)
 
         # 完了順はバラバラなので、条件順に並べ直す
         results.sort(

@@ -4,6 +4,8 @@ import re
 import numpy as np
 import csv
 import time
+import shutil
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # パスの定義（sourceフォルダから見た相対パス）
@@ -90,8 +92,18 @@ def replace_mos_parameter(content, transistor, parameter, value):
 
     return "\n".join(lines)
 
-def modify_netlist_params(
-        netlist_path,
+def modify_netlist_params(netlist_path, **kwargs):
+    """ネットリストファイル内の電源電圧などのパラメータを書き換える (引数は modify_netlist_content と同じ)"""
+    with open(netlist_path, 'r') as f:
+        content = f.read()
+
+    content = modify_netlist_content(content, **kwargs)
+
+    with open(netlist_path, 'w') as f:
+        f.write(content)
+
+def modify_netlist_content(
+        content,
         vdd_val=None,
         vb_val=None,
         vin_val=None,
@@ -99,9 +111,10 @@ def modify_netlist_params(
         wtail_val=None,
         l_val=None
     ):
-    """ネットリスト内の電源電圧などのパラメータを書き換える"""
-    with open(netlist_path, 'r') as f:
-        content = f.read()
+    """
+    ネットリストの文字列内の電源電圧などのパラメータを書き換えて返す。
+    (ファイルを介さないので、並列実行時のファイル入出力を減らせる)
+    """
 
     # modify vdd
     if vdd_val is not None:
@@ -159,8 +172,7 @@ def modify_netlist_params(
 
             content = replace_mos_parameter(content, transistor, "L", l_val)
 
-    with open(netlist_path, 'w') as f:
-        f.write(content)
+    return content
 
 def run_ngspice(netlist_path):
     """Ngspiceをバッチモードで実行する"""
@@ -261,10 +273,13 @@ def is_saturated(params):
 
     return on and sat
 
-def simulate_point(template_content, vb, vin):
+def simulate_point(template_content, work_dir, vb, vin):
     """
     1つの (Vb, Vin) についてネットリスト作成 → ngspice実行 → 解析を行う。
     並列実行時に表示が混ざらないよう、ログは文字列で返す。
+
+    作業用ネットリストは work_dir (コンテナ内の一時フォルダ) に作る。
+    Windows側のマウントフォルダに作ると、ファイル入出力の待ちで遅くなるため。
 
     戻り値: (row または None, ログ文字列)
     """
@@ -272,15 +287,14 @@ def simulate_point(template_content, vb, vin):
     log = []
 
     # 条件ごとにファイル名が異なるので並列でも衝突しない
-    work_spice = os.path.join(NETLIST_DIR, f"5tota_vb_{vb:.2f}_vin_{vin:.2f}.spice")
+    work_spice = os.path.join(work_dir, f"5tota_vb_{vb:.2f}_vin_{vin:.2f}.spice")
 
     try:
-        # テンプレートから作業用ネットリストを作成
-        with open(work_spice, 'w') as dst:
-            dst.write(template_content)
+        # パラメータをメモリ上で書き換えてから、1回だけ書き込む
+        content = modify_netlist_content(template_content, vb_val=vb, vin_val=vin)
 
-        # パラメータ書き換え
-        modify_netlist_params(work_spice, vb_val=vb, vin_val=vin)
+        with open(work_spice, 'w') as dst:
+            dst.write(content)
 
         # シミュレーション実行
         success, stdout = run_ngspice(work_spice)
@@ -370,32 +384,43 @@ if __name__ == "__main__":
         ]
 
         num_iterations = len(conditions)
+
+        # 作業用ネットリストはコンテナ内の一時フォルダ (/tmp/5tota_xxxx) に作る
+        # (環境変数 WORK_DIR で親フォルダを変更可能)
+        work_dir = tempfile.mkdtemp(prefix="5tota_", dir=os.environ.get("WORK_DIR"))
+
         print(f"Total conditions: {num_iterations}, workers: {num_workers}")
+        print(f"Work directory: {work_dir}")
 
         # 計測開始
         start_time = time.perf_counter()
 
-        # ngspiceは別プロセスで動くので、スレッドでも並列に実行される
-        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        try:
+            # ngspiceは別プロセスで動くので、スレッドでも並列に実行される
+            with ThreadPoolExecutor(max_workers=num_workers) as executor:
 
-            futures = [
-                executor.submit(simulate_point, template_content, vb, vin)
-                for vb, vin in conditions
-            ]
+                futures = [
+                    executor.submit(simulate_point, template_content, work_dir, vb, vin)
+                    for vb, vin in conditions
+                ]
 
-            for done, future in enumerate(as_completed(futures), 1):
+                for done, future in enumerate(as_completed(futures), 1):
 
-                try:
-                    row, log = future.result()
-                except Exception as e:
-                    row, log = None, f"ERROR: {e}"
+                    try:
+                        row, log = future.result()
+                    except Exception as e:
+                        row, log = None, f"ERROR: {e}"
 
-                elapsed = time.perf_counter() - start_time
-                print(f"[{done}/{num_iterations}] elapsed {elapsed:.1f} s")
-                print(log)
+                    elapsed = time.perf_counter() - start_time
+                    print(f"[{done}/{num_iterations}] elapsed {elapsed:.1f} s")
+                    print(log)
 
-                if row is not None:
-                    results.append(row)
+                    if row is not None:
+                        results.append(row)
+
+        finally:
+            # 途中で止めた場合も一時フォルダを消す
+            shutil.rmtree(work_dir, ignore_errors=True)
 
         # 完了順はバラバラなので、条件順に並べ直す
         results.sort(key=lambda r: (r["Vb_V"], r["Vin_V"]))
