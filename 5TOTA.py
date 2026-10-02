@@ -108,7 +108,6 @@ def modify_netlist_content(
         vb_val=None,
         vin_val=None,
         w_val=None,
-        wtail_val=None,
         l_val=None
     ):
     """
@@ -144,7 +143,10 @@ def modify_netlist_content(
             flags=re.IGNORECASE
         )
 
-    # modify W
+    # modify W (w_val = 差動対のW)
+    #   差動対 M1, M2 : W
+    #   カレントミラー M3, M4 (PMOS) : 2W (PMOSの移動度はNMOSの約半分)
+    #   テール電流源 M5 : 2W (差動対の2倍の電流を流す)
     if w_val is not None:
         wp_value = 2.0 * w_val
         wn_value = w_val
@@ -273,9 +275,9 @@ def is_saturated(params):
 
     return on and sat
 
-def simulate_point(template_content, work_dir, vb, vin):
+def simulate_point(template_content, work_dir, w, l, vb, vin):
     """
-    1つの (Vb, Vin) についてネットリスト作成 → ngspice実行 → 解析を行う。
+    1つの (W, L, Vb, Vin) についてネットリスト作成 → ngspice実行 → 解析を行う。
     並列実行時に表示が混ざらないよう、ログは文字列で返す。
 
     作業用ネットリストは work_dir (コンテナ内の一時フォルダ) に作る。
@@ -283,15 +285,17 @@ def simulate_point(template_content, work_dir, vb, vin):
 
     戻り値: (row または None, ログ文字列)
     """
-    label = f"Vb = {vb:.2f}, Vin = {vin:.2f}V"
+    label = f"W = {w}u, L = {l}u, Vb = {vb:.2f}, Vin = {vin:.2f}V"
     log = []
 
     # 条件ごとにファイル名が異なるので並列でも衝突しない
-    work_spice = os.path.join(work_dir, f"5tota_vb_{vb:.2f}_vin_{vin:.2f}.spice")
+    work_spice = os.path.join(work_dir, f"5tota_w_{w}_l_{l}_vb_{vb:.2f}_vin_{vin:.2f}.spice")
 
     try:
         # パラメータをメモリ上で書き換えてから、1回だけ書き込む
-        content = modify_netlist_content(template_content, vb_val=vb, vin_val=vin)
+        content = modify_netlist_content(
+            template_content, vb_val=vb, vin_val=vin, w_val=w, l_val=l
+        )
 
         with open(work_spice, 'w') as dst:
             dst.write(content)
@@ -316,6 +320,8 @@ def simulate_point(template_content, work_dir, vb, vin):
         log.append(f" -> gain_dc = {gain_value:.4f} dB")
 
         row = {
+            "W_um": w,
+            "L_um": l,
             "Vb_V": vb,
             "Vin_V": vin,
             "gain_dc_dB": gain_value
@@ -364,6 +370,12 @@ if __name__ == "__main__":
     if spice_template and os.path.exists(spice_template):
         print(f"Base netlist generated: {spice_template}")
 
+        # 差動対の W [um] (カレントミラーとテールは自動で 2W になる)
+        w_list = [5.6, 11.2, 22.4, 44.8]
+
+        # L [um] (5つのトランジスタで共通)
+        l_list = [0.28, 0.56, 1.12, 2.24]
+
         # VDD は回路図の設定値 (.param vdd=3.3) をそのまま使うので、Vin はその範囲内
         vb_sweep = np.arange(0.6, 1.5, 0.02)
         vin_sweep = np.arange(0.1, 3.4, 0.02)
@@ -378,7 +390,9 @@ if __name__ == "__main__":
 
         # 全条件の組み合わせ
         conditions = [
-            (round(float(vb), 2), round(float(vin), 2))
+            (w, l, round(float(vb), 2), round(float(vin), 2))
+            for w in w_list
+            for l in l_list
             for vb in vb_sweep
             for vin in vin_sweep
         ]
@@ -400,8 +414,8 @@ if __name__ == "__main__":
             with ThreadPoolExecutor(max_workers=num_workers) as executor:
 
                 futures = [
-                    executor.submit(simulate_point, template_content, work_dir, vb, vin)
-                    for vb, vin in conditions
+                    executor.submit(simulate_point, template_content, work_dir, w, l, vb, vin)
+                    for w, l, vb, vin in conditions
                 ]
 
                 for done, future in enumerate(as_completed(futures), 1):
@@ -423,7 +437,7 @@ if __name__ == "__main__":
             shutil.rmtree(work_dir, ignore_errors=True)
 
         # 完了順はバラバラなので、条件順に並べ直す
-        results.sort(key=lambda r: (r["Vb_V"], r["Vin_V"]))
+        results.sort(key=lambda r: (r["W_um"], r["L_um"], r["Vb_V"], r["Vin_V"]))
 
         # 計測終了
         elapsed_time = time.perf_counter() - start_time

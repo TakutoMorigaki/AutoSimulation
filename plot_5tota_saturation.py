@@ -31,15 +31,14 @@ DETAIL_DIR = os.path.join(
     "5tota_saturation"
 )
 
-MAP_PATH = os.path.join(
+# W × L の全組み合わせを並べた飽和マップ
+OVERVIEW_PATH = os.path.join(
     DETAIL_DIR,
-    "5tota_saturation_map.png"
+    "5tota_saturation_map_all.png"
 )
 
-RANGE_PATH = os.path.join(
-    DETAIL_DIR,
-    "5tota_saturation_vin_range.png"
-)
+# W, L の組ごとに描き分けるための列
+WL_KEYS = ["W_um", "L_um"]
 
 # 飽和していない領域の色
 UNSAT_COLOR = "#e6e6e6"
@@ -64,6 +63,21 @@ def get_transistors(df):
             names.append(match.group(1))
 
     return sorted(names, key=lambda n: int(n[1:]))
+
+
+def wl_label(w, l):
+    return f"W = {w:g} um, L = {l:g} um"
+
+
+def wl_path(name, w, l):
+    """
+    W, L の組ごとの図の保存先 (例: 5tota_saturation_map_w_11.2_l_0.28.png)
+    """
+
+    return os.path.join(
+        DETAIL_DIR,
+        f"{name}_w_{w:g}_l_{l:g}.png"
+    )
 
 
 def to_grid(sub, value):
@@ -94,6 +108,34 @@ def find_max_gain(df):
     return sat.loc[sat["gain_dc_dB"].idxmax()]
 
 
+def gain_cmap():
+    """
+    飽和領域を DC Gain で塗るカラーマップ
+    (飽和していない点は NaN にして灰色で表示)
+    """
+
+    # Bluesの白に近い端は背景と区別しにくいので使わない
+    cmap = ListedColormap(
+        plt.get_cmap("Blues")(np.linspace(0.3, 1.0, 256))
+    )
+    cmap.set_bad(UNSAT_COLOR)
+
+    return cmap
+
+
+def gain_range(df):
+    """
+    飽和している点の DC Gain の最小値・最大値 (カラーバーの範囲)
+    """
+
+    sat = df[df["all_sat"] == 1]
+
+    if sat.empty:
+        return None, None
+
+    return sat["gain_dc_dB"].min(), sat["gain_dc_dB"].max()
+
+
 def draw_grid(ax, grid, cmap, vmin, vmax):
 
     return ax.pcolormesh(
@@ -107,49 +149,51 @@ def draw_grid(ax, grid, cmap, vmin, vmax):
     )
 
 
+def draw_gain_map(ax, sub, cmap, vmin, vmax):
+    """
+    飽和領域を DC Gain で塗ったマップを描く
+    """
+
+    sub = sub.copy()
+    sub["gain_sat"] = sub["gain_dc_dB"].where(sub["all_sat"] == 1)
+
+    return draw_grid(ax, to_grid(sub, "gain_sat"), cmap, vmin, vmax)
+
+
+def mark_max_gain(ax, best):
+
+    ax.plot(
+        best["Vin_V"],
+        best["Vb_V"],
+        marker="*",
+        markersize=14,
+        color="tab:red",
+        markeredgecolor="white",
+        linestyle="none",
+        label=(
+            f"Max gain {best['gain_dc_dB']:.2f} dB\n"
+            f"(Vin = {best['Vin_V']:.2f} V, Vb = {best['Vb_V']:.2f} V)"
+        )
+    )
+
+
 # ============================================================
 # 1. 飽和マップ (飽和領域を DC Gain で色付け)
 # ============================================================
 
-def plot_saturation_map(df):
+def plot_saturation_map(sub, w, l):
 
     fig, ax = plt.subplots(figsize=(6, 4.5))
 
-    sat = df[df["all_sat"] == 1]
-    vmin = sat["gain_dc_dB"].min()
-    vmax = sat["gain_dc_dB"].max()
+    vmin, vmax = gain_range(sub)
 
-    # 飽和していない点は NaN にして灰色で表示
-    # (Bluesの白に近い端は背景と区別しにくいので使わない)
-    cmap = ListedColormap(
-        plt.get_cmap("Blues")(np.linspace(0.3, 1.0, 256))
-    )
-    cmap.set_bad(UNSAT_COLOR)
-
-    sub = df.copy()
-    sub["gain_sat"] = sub["gain_dc_dB"].where(sub["all_sat"] == 1)
-
-    image = draw_grid(ax, to_grid(sub, "gain_sat"), cmap, vmin, vmax)
+    image = draw_gain_map(ax, sub, gain_cmap(), vmin, vmax)
 
     # 飽和領域内で利得が最大となる点
-    best = find_max_gain(df)
+    best = find_max_gain(sub)
 
     if best is not None:
-
-        ax.plot(
-            best["Vin_V"],
-            best["Vb_V"],
-            marker="*",
-            markersize=14,
-            color="tab:red",
-            markeredgecolor="white",
-            linestyle="none",
-            label=(
-                f"Max gain {best['gain_dc_dB']:.2f} dB\n"
-                f"(Vin = {best['Vin_V']:.2f} V, Vb = {best['Vb_V']:.2f} V)"
-            )
-        )
-
+        mark_max_gain(ax, best)
         ax.legend(loc="best", fontsize=8)
 
     ax.set_xlabel("Vin [V]")
@@ -159,23 +203,23 @@ def plot_saturation_map(df):
     cbar.set_label("DC Gain [dB] (all transistors saturated)")
 
     ax.set_title(
-        "5T OTA saturation region\n"
+        f"5T OTA saturation region ({wl_label(w, l)})\n"
         "(gray: at least one transistor not saturated, white: not simulated)"
     )
 
-    fig.savefig(MAP_PATH, dpi=300, bbox_inches="tight")
+    path = wl_path("5tota_saturation_map", w, l)
+
+    fig.savefig(path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
-    print(f"Saturation map saved: {MAP_PATH}")
+    print(f"Saturation map saved: {path}")
 
 
 # ============================================================
 # 2. トランジスタ別の飽和マップ
 # ============================================================
 
-def plot_by_transistor(df, transistors):
-
-    os.makedirs(DETAIL_DIR, exist_ok=True)
+def plot_by_transistor(sub, w, l, transistors):
 
     # 0: 非飽和 (灰), 1: 飽和 (青)
     cmap = ListedColormap([UNSAT_COLOR, "#2a6fb0"])
@@ -194,20 +238,19 @@ def plot_by_transistor(df, transistors):
 
         col = "all_sat" if name == "all" else f"{name}_sat"
 
-        draw_grid(ax, to_grid(df, col), cmap, 0, 1)
+        draw_grid(ax, to_grid(sub, col), cmap, 0, 1)
 
         ax.set_title("All" if name == "all" else name)
         ax.set_xlabel("Vin [V]")
 
     axes[0].set_ylabel("Vb [V]")
 
-    fig.suptitle("Saturated region per transistor (blue: saturated)")
+    fig.suptitle(
+        f"Saturated region per transistor ({wl_label(w, l)}, blue: saturated)"
+    )
     fig.tight_layout()
 
-    path = os.path.join(
-        DETAIL_DIR,
-        "5tota_sat_by_transistor.png"
-    )
+    path = wl_path("5tota_sat_by_transistor", w, l)
 
     fig.savefig(path, dpi=300, bbox_inches="tight")
     plt.close(fig)
@@ -219,9 +262,13 @@ def plot_by_transistor(df, transistors):
 # 3. 飽和する Vin の下限・上限 vs Vb
 # ============================================================
 
-def plot_vin_range(df):
+def plot_vin_range(sub, w, l):
 
-    sat = df[df["all_sat"] == 1]
+    sat = sub[sub["all_sat"] == 1]
+
+    if sat.empty:
+        print(f"No all-saturated point ({wl_label(w, l)}): Vin range plot skipped")
+        return
 
     vin_range = (
         sat.groupby("Vb_V")["Vin_V"]
@@ -249,13 +296,86 @@ def plot_vin_range(df):
 
     axes[0].set_ylabel("Vin [V]")
 
+    fig.suptitle(wl_label(w, l))
     fig.tight_layout()
-    fig.savefig(RANGE_PATH, dpi=300, bbox_inches="tight")
+
+    path = wl_path("5tota_saturation_vin_range", w, l)
+
+    fig.savefig(path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
-    print(f"Vin range plot saved: {RANGE_PATH}")
+    print(f"Vin range plot saved: {path}")
 
-    return vin_range
+
+# ============================================================
+# 4. W (行) × L (列) の全組み合わせを並べた飽和マップ
+# ============================================================
+
+def plot_overview(df):
+
+    w_list = sorted(df["W_um"].unique())
+    l_list = sorted(df["L_um"].unique())
+
+    fig, axes = plt.subplots(
+        len(w_list),
+        len(l_list),
+        figsize=(3.6 * len(l_list), 2.8 * len(w_list)),
+        sharex=True,
+        sharey=True,
+        squeeze=False
+    )
+
+    # 組どうしを比べられるよう、カラーバーの範囲は全組で共通にする
+    vmin, vmax = gain_range(df)
+    cmap = gain_cmap()
+
+    image = None
+
+    for i, w in enumerate(w_list):
+
+        for j, l in enumerate(l_list):
+
+            ax = axes[i, j]
+            sub = df[(df["W_um"] == w) & (df["L_um"] == l)]
+
+            if sub.empty:
+                ax.set_visible(False)
+                continue
+
+            image = draw_gain_map(ax, sub, cmap, vmin, vmax)
+
+            best = find_max_gain(sub)
+
+            if best is not None:
+                mark_max_gain(ax, best)
+                gain_text = f"max {best['gain_dc_dB']:.2f} dB"
+            else:
+                gain_text = "no saturated point"
+
+            ax.set_title(
+                f"W = {w:g}, L = {l:g}\n{gain_text}",
+                fontsize=9
+            )
+
+    for ax in axes[-1]:
+        ax.set_xlabel("Vin [V]")
+
+    for ax in axes[:, 0]:
+        ax.set_ylabel("Vb [V]")
+
+    if image is not None:
+        cbar = fig.colorbar(image, ax=axes, shrink=0.8)
+        cbar.set_label("DC Gain [dB] (all transistors saturated)")
+
+    fig.suptitle(
+        "5T OTA all-saturated region (rows: W, columns: L [um])\n"
+        "W: differential pair (current mirror and tail: 2W)"
+    )
+
+    fig.savefig(OVERVIEW_PATH, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+    print(f"Overview map saved: {OVERVIEW_PATH}")
 
 
 # ============================================================
@@ -266,8 +386,14 @@ if __name__ == "__main__":
 
     df = pd.read_csv(CSV_PATH)
 
+    if not all(key in df.columns for key in WL_KEYS):
+        raise SystemExit(
+            "CSVに W_um, L_um の列がありません。"
+            "最新の 5TOTA.py でシミュレーションし直してください。"
+        )
+
     # 浮動小数点の誤差を丸める
-    for col in ["Vb_V", "Vin_V"]:
+    for col in WL_KEYS + ["Vb_V", "Vin_V"]:
         df[col] = df[col].round(3)
 
     transistors = get_transistors(df)
@@ -277,29 +403,31 @@ if __name__ == "__main__":
 
     os.makedirs(DETAIL_DIR, exist_ok=True)
 
-    plot_saturation_map(df)
-    plot_by_transistor(df, transistors)
-    vin_range = plot_vin_range(df)
+    # W, L の組ごとに描き分ける
+    for (w, l), sub in df.groupby(WL_KEYS):
 
-    # 飽和する Vin の範囲を表示
+        print(f"\n{wl_label(w, l)}")
+
+        plot_saturation_map(sub, w, l)
+        plot_by_transistor(sub, w, l, transistors)
+        plot_vin_range(sub, w, l)
+
+    # 全組み合わせを並べた飽和マップ
     print()
-    print("Saturated Vin range [V]:")
+    plot_overview(df)
 
-    for _, r in vin_range.iterrows():
-        print(
-            f"  Vb = {r['Vb_V']:.2f} V: "
-            f"{r['min']:.2f} ~ {r['max']:.2f}"
-        )
-
-    # 利得が最大となる点を表示
-    best = find_max_gain(df)
-
+    # W, L の組ごとに、利得が最大となる点を表示
     print()
+    print("Max gain (all saturated):")
 
-    if best is not None:
-        print(
-            f"Max gain (all saturated): {best['gain_dc_dB']:.4f} dB "
-            f"at Vb = {best['Vb_V']:.2f} V, Vin = {best['Vin_V']:.2f} V"
-        )
-    else:
-        print("No all-saturated point")
+    for (w, l), sub in df.groupby(WL_KEYS):
+
+        best = find_max_gain(sub)
+
+        if best is not None:
+            print(
+                f"  {wl_label(w, l)}: {best['gain_dc_dB']:.4f} dB "
+                f"at Vb = {best['Vb_V']:.2f} V, Vin = {best['Vin_V']:.2f} V"
+            )
+        else:
+            print(f"  {wl_label(w, l)}: no all-saturated point")
