@@ -167,7 +167,8 @@ def modify_netlist_content(
         vin_val=None,
         w1_val=None,
         w2_val=None,
-        l_val=None
+        l_val=None,
+        rd_val=None
     ):
     """
     ネットリストの文字列内の各種パラメータを書き換えて返す。
@@ -227,6 +228,27 @@ def modify_netlist_content(
 
             flags=re.IGNORECASE
         )
+
+
+    # --------------------------------------------------------
+    # RD (負荷抵抗 R1 [Ω]。回路図で value={R1} としている)
+    # --------------------------------------------------------
+
+    if rd_val is not None:
+
+        content, count = re.subn(
+            r'(\.param\s+R1\s*=\s*)'
+            r'[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?',
+
+            rf'\g<1>{rd_val}',
+
+            content,
+
+            flags=re.IGNORECASE
+        )
+
+        if count == 0:
+            print("WARNING: .param R1 がネットリスト内に見つかりません")
 
 
     # --------------------------------------------------------
@@ -459,9 +481,9 @@ def is_saturated(params):
 # 1条件分のシミュレーション (並列実行の単位)
 # ============================================================
 
-def simulate_point(template_content, work_dir, w1, w2, vb, vin):
+def simulate_point(template_content, work_dir, rd, w1, w2, vb, vin):
     """
-    1つの (W1, W2, Vb, Vin) についてネットリスト作成 → ngspice実行 → 解析を行う。
+    1つの (RD, W1, W2, Vb, Vin) についてネットリスト作成 → ngspice実行 → 解析を行う。
     並列実行時に表示が混ざらないよう、ログは文字列で返す。
 
     作業用ネットリストは work_dir (コンテナ内の一時フォルダ) に作る。
@@ -472,6 +494,7 @@ def simulate_point(template_content, work_dir, w1, w2, vb, vin):
 
     log = [
         f"====================================\n"
+        f"RD  = {rd:g} ohm\n"
         f"W1  = {w1} um, W2 = {w2} um\n"
         f"Vb  = {vb:.2f} V\n"
         f"Vin = {vin:.2f} V\n"
@@ -487,6 +510,7 @@ def simulate_point(template_content, work_dir, w1, w2, vb, vin):
         work_dir,
         (
             f"cascade_"
+            f"rd_{rd:g}_"
             f"w1_{w1}_"
             f"w2_{w2}_"
             f"vb_{vb:.2f}_"
@@ -498,13 +522,14 @@ def simulate_point(template_content, work_dir, w1, w2, vb, vin):
 
     try:
 
-        # .param と W をメモリ上で書き換えてから、1回だけ書き込む
+        # .param, W, RD をメモリ上で書き換えてから、1回だけ書き込む
         content = modify_netlist_content(
             template_content,
             vb_val=vb,
             vin_val=vin,
             w1_val=w1,
-            w2_val=w2
+            w2_val=w2,
+            rd_val=rd
         )
 
         with open(work_spice, "w") as dst:
@@ -531,6 +556,7 @@ def simulate_point(template_content, work_dir, w1, w2, vb, vin):
         )
 
         row = {
+            "RD_ohm": rd,
             "W1_um": w1,
             "W2_um": w2,
             "Vb_V": vb,
@@ -610,6 +636,9 @@ if __name__ == "__main__":
 
         # VDD は回路図の設定値 (.param vdd) をそのまま使う
 
+        # RD [Ω] (負荷抵抗 R1。複数指定するとそれぞれで掃引する)
+        rd_list = [2000, 3000, 4000, 5000]
+
         # W [um] (M1, M2 それぞれ独立に振る)
         w1_list = [5.6, 11.2, 22.4, 44.8]
         w2_list = [5.6, 11.2, 22.4, 44.8]
@@ -641,11 +670,13 @@ if __name__ == "__main__":
         # 全条件の組み合わせ
         conditions = [
             (
+                rd,
                 w1,
                 w2,
                 round(float(vb), 2),
                 round(float(vin), 2)
             )
+            for rd in rd_list
             for w1 in w1_list
             for w2 in w2_list
             for vb in vb_sweep
@@ -659,7 +690,7 @@ if __name__ == "__main__":
 
 
         # ====================================================
-        # 3. W1 × W2 × Vb × Vin の全組み合わせを並列実行
+        # 3. RD × W1 × W2 × Vb × Vin の全組み合わせを並列実行
         # ====================================================
 
         # 作業用ネットリストはコンテナ内の一時フォルダ (/tmp/cascade_xxxx) に作る
@@ -688,12 +719,13 @@ if __name__ == "__main__":
                         simulate_point,
                         template_content,
                         work_dir,
+                        rd,
                         w1,
                         w2,
                         vb,
                         vin
                     )
-                    for w1, w2, vb, vin in conditions
+                    for rd, w1, w2, vb, vin in conditions
                 ]
 
                 for done, future in enumerate(as_completed(futures), 1):
@@ -720,7 +752,7 @@ if __name__ == "__main__":
 
         # 完了順はバラバラなので、条件順に並べ直す
         results.sort(
-            key=lambda r: (r["W1_um"], r["W2_um"], r["Vb_V"], r["Vin_V"])
+            key=lambda r: (r["RD_ohm"], r["W1_um"], r["W2_um"], r["Vb_V"], r["Vin_V"])
         )
 
 

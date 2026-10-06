@@ -29,34 +29,28 @@ DETAIL_DIR = os.path.join(
     "cascade_saturation"
 )
 
-# W1 × W2 の全組み合わせを並べた飽和マップ
-OVERVIEW_PATH = os.path.join(
-    DETAIL_DIR,
-    "cascade_saturation_map_all.png"
-)
-
-# W の組ごとに描き分けるための列
-W_KEYS = ["W1_um", "W2_um"]
+# RD, W の組ごとに描き分けるための列
+KEYS = ["RD_ohm", "W1_um", "W2_um"]
 
 
 # ============================================================
 # 補助関数
 # ============================================================
 
-def w_label(w1, w2):
-    return f"W1 = {w1:g} um, W2 = {w2:g} um"
+def label(rd, w1, w2):
+    return f"RD = {rd:g} ohm, W1 = {w1:g} um, W2 = {w2:g} um"
 
 
 def add_gain(df):
     """
-    W の組と Vb ごとに小信号ゲイン dVout/dVin を計算し、gain 列として追加する
+    RD, W の組と Vb ごとに小信号ゲイン dVout/dVin を計算し、gain 列として追加する
     """
 
-    df = df.sort_values(W_KEYS + ["Vb_V", "Vin_V"]).copy()
+    df = df.sort_values(KEYS + ["Vb_V", "Vin_V"]).copy()
 
     df["gain"] = 0.0
 
-    for _, s in df.groupby(W_KEYS + ["Vb_V"]):
+    for _, s in df.groupby(KEYS + ["Vb_V"]):
 
         if len(s) > 1:
             df.loc[s.index, "gain"] = np.gradient(
@@ -122,9 +116,9 @@ def draw_saturation_map(ax, sub):
     )
 
 
-def plot_summary(sub, w1, w2):
+def plot_summary(sub, rd, w1, w2):
     """
-    W の組1つ分の飽和マップ
+    RD, W の組1つ分の飽和マップ
     """
 
     fig, ax = plt.subplots(figsize=(6, 5))
@@ -140,13 +134,13 @@ def plot_summary(sub, w1, w2):
 
     ax.set_xlabel("Vin [V]")
     ax.set_ylabel("Vb [V]")
-    ax.set_title(f"All saturated ({w_label(w1, w2)})")
+    ax.set_title(f"All saturated\n({label(rd, w1, w2)})")
 
     fig.tight_layout()
 
     path = os.path.join(
         DETAIL_DIR,
-        f"cascade_saturation_map_w1_{w1:g}_w2_{w2:g}.png"
+        f"cascade_saturation_map_rd_{rd:g}_w1_{w1:g}_w2_{w2:g}.png"
     )
 
     fig.savefig(path, dpi=300, bbox_inches="tight")
@@ -155,13 +149,13 @@ def plot_summary(sub, w1, w2):
     print(f"Saturation map saved: {path}")
 
 
-def plot_overview(df):
+def plot_overview(rd_sub, rd):
     """
-    W1 (行) × W2 (列) の全組み合わせの飽和マップを1枚に並べる
+    RD 1つ分について、W1 (行) × W2 (列) の全組み合わせの飽和マップを1枚に並べる
     """
 
-    w1_list = sorted(df["W1_um"].unique())
-    w2_list = sorted(df["W2_um"].unique())
+    w1_list = sorted(rd_sub["W1_um"].unique())
+    w2_list = sorted(rd_sub["W2_um"].unique())
 
     fig, axes = plt.subplots(
         len(w1_list),
@@ -177,7 +171,7 @@ def plot_overview(df):
         for j, w2 in enumerate(w2_list):
 
             ax = axes[i, j]
-            sub = df[(df["W1_um"] == w1) & (df["W2_um"] == w2)]
+            sub = rd_sub[(rd_sub["W1_um"] == w1) & (rd_sub["W2_um"] == w2)]
 
             if sub.empty:
                 ax.set_visible(False)
@@ -204,12 +198,21 @@ def plot_overview(df):
     for ax in axes[:, 0]:
         ax.set_ylabel("Vb [V]")
 
-    fig.suptitle("Cascade all-saturated region (rows: W1, columns: W2 [um])")
+    fig.suptitle(
+        f"Cascade all-saturated region, RD = {rd:g} ohm "
+        f"(rows: W1, columns: W2 [um])"
+    )
     fig.tight_layout()
-    fig.savefig(OVERVIEW_PATH, dpi=300, bbox_inches="tight")
+
+    path = os.path.join(
+        DETAIL_DIR,
+        f"cascade_saturation_map_all_rd_{rd:g}.png"
+    )
+
+    fig.savefig(path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
-    print(f"Overview map saved: {OVERVIEW_PATH}")
+    print(f"Overview map saved: {path}")
 
 
 # ============================================================
@@ -226,14 +229,14 @@ if __name__ == "__main__":
             "最新の cascade.py でシミュレーションし直してください。"
         )
 
-    if not all(key in df.columns for key in W_KEYS):
+    if not all(key in df.columns for key in KEYS):
         raise SystemExit(
-            "CSVに W1_um, W2_um の列がありません。"
+            "CSVに RD_ohm, W1_um, W2_um の列がありません。"
             "最新の cascade.py でシミュレーションし直してください。"
         )
 
     # 浮動小数点の誤差を丸める
-    for col in W_KEYS + ["Vb_V", "Vin_V"]:
+    for col in KEYS + ["Vb_V", "Vin_V"]:
         df[col] = df[col].round(3)
 
     df = add_gain(df)
@@ -242,25 +245,26 @@ if __name__ == "__main__":
 
     os.makedirs(DETAIL_DIR, exist_ok=True)
 
-    # W の組ごとの飽和マップ
-    for (w1, w2), w_sub in df.groupby(W_KEYS):
-        plot_summary(w_sub, w1, w2)
+    # RD, W の組ごとの飽和マップ
+    for (rd, w1, w2), sub in df.groupby(KEYS):
+        plot_summary(sub, rd, w1, w2)
 
-    # 全組み合わせを並べた飽和マップ
-    plot_overview(df)
+    # RD ごとに、W の全組み合わせを並べた飽和マップ
+    for rd, rd_sub in df.groupby("RD_ohm"):
+        plot_overview(rd_sub, rd)
 
-    # W の組ごとに、利得が最大となる点を表示
+    # RD, W の組ごとに、利得が最大となる点を表示
     print()
     print("Max |gain| (all saturated):")
 
-    for (w1, w2), w_sub in df.groupby(W_KEYS):
+    for (rd, w1, w2), sub in df.groupby(KEYS):
 
-        best = find_max_gain(w_sub)
+        best = find_max_gain(sub)
 
         if best is not None:
             print(
-                f"  {w_label(w1, w2)}: {abs(best['gain']):.4g} V/V "
+                f"  {label(rd, w1, w2)}: {abs(best['gain']):.4g} V/V "
                 f"at Vb = {best['Vb_V']:.2f} V, Vin = {best['Vin_V']:.2f} V"
             )
         else:
-            print(f"  {w_label(w1, w2)}: no all-saturated point")
+            print(f"  {label(rd, w1, w2)}: no all-saturated point")
