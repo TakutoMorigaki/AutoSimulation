@@ -29,21 +29,27 @@ DETAIL_DIR = os.path.join(
     "cascade_saturation"
 )
 
-# RD, W の組ごとに描き分けるための列
-KEYS = ["RD_ohm", "W1_um", "W2_um"]
+# RD, W, L の組ごとに描き分けるための列
+KEYS = ["RD_ohm", "W1_um", "W2_um", "L1_um", "L2_um"]
+
+# 一覧図 (W1 × W2) を1枚ずつ分ける列
+OVERVIEW_KEYS = ["RD_ohm", "L1_um", "L2_um"]
 
 
 # ============================================================
 # 補助関数
 # ============================================================
 
-def label(rd, w1, w2):
-    return f"RD = {rd:g} ohm, W1 = {w1:g} um, W2 = {w2:g} um"
+def label(rd, w1, w2, l1, l2):
+    return (
+        f"RD = {rd:g} ohm, W1 = {w1:g} um, W2 = {w2:g} um, "
+        f"L1 = {l1:g} um, L2 = {l2:g} um"
+    )
 
 
 def add_gain(df):
     """
-    RD, W の組と Vb ごとに小信号ゲイン dVout/dVin を計算し、gain 列として追加する
+    RD, W, L の組と Vb ごとに小信号ゲイン dVout/dVin を計算し、gain 列として追加する
     """
 
     df = df.sort_values(KEYS + ["Vb_V", "Vin_V"]).copy()
@@ -116,9 +122,9 @@ def draw_saturation_map(ax, sub):
     )
 
 
-def plot_summary(sub, rd, w1, w2):
+def plot_summary(sub, rd, w1, w2, l1, l2):
     """
-    RD, W の組1つ分の飽和マップ
+    RD, W, L の組1つ分の飽和マップ
     """
 
     fig, ax = plt.subplots(figsize=(6, 5))
@@ -134,13 +140,14 @@ def plot_summary(sub, rd, w1, w2):
 
     ax.set_xlabel("Vin [V]")
     ax.set_ylabel("Vb [V]")
-    ax.set_title(f"All saturated\n({label(rd, w1, w2)})")
+    ax.set_title(f"All saturated\n({label(rd, w1, w2, l1, l2)})", fontsize=9)
 
     fig.tight_layout()
 
     path = os.path.join(
         DETAIL_DIR,
-        f"cascade_saturation_map_rd_{rd:g}_w1_{w1:g}_w2_{w2:g}.png"
+        f"cascade_saturation_map_rd_{rd:g}_w1_{w1:g}_w2_{w2:g}"
+        f"_l1_{l1:g}_l2_{l2:g}.png"
     )
 
     fig.savefig(path, dpi=300, bbox_inches="tight")
@@ -149,9 +156,9 @@ def plot_summary(sub, rd, w1, w2):
     print(f"Saturation map saved: {path}")
 
 
-def plot_overview(rd_sub, rd):
+def plot_overview(rd_sub, rd, l1, l2):
     """
-    RD 1つ分について、W1 (行) × W2 (列) の全組み合わせの飽和マップを1枚に並べる
+    RD, L1, L2 の組1つ分について、W1 (行) × W2 (列) の全組み合わせの飽和マップを1枚に並べる
     """
 
     w1_list = sorted(rd_sub["W1_um"].unique())
@@ -199,14 +206,14 @@ def plot_overview(rd_sub, rd):
         ax.set_ylabel("Vb [V]")
 
     fig.suptitle(
-        f"Cascade all-saturated region, RD = {rd:g} ohm "
-        f"(rows: W1, columns: W2 [um])"
+        f"Cascade all-saturated region, RD = {rd:g} ohm, "
+        f"L1 = {l1:g} um, L2 = {l2:g} um (rows: W1, columns: W2 [um])"
     )
     fig.tight_layout()
 
     path = os.path.join(
         DETAIL_DIR,
-        f"cascade_saturation_map_all_rd_{rd:g}.png"
+        f"cascade_saturation_map_all_rd_{rd:g}_l1_{l1:g}_l2_{l2:g}.png"
     )
 
     fig.savefig(path, dpi=300, bbox_inches="tight")
@@ -231,7 +238,7 @@ if __name__ == "__main__":
 
     if not all(key in df.columns for key in KEYS):
         raise SystemExit(
-            "CSVに RD_ohm, W1_um, W2_um の列がありません。"
+            "CSVに RD_ohm, W1_um, W2_um, L1_um, L2_um の列がありません。"
             "最新の cascade.py でシミュレーションし直してください。"
         )
 
@@ -245,26 +252,26 @@ if __name__ == "__main__":
 
     os.makedirs(DETAIL_DIR, exist_ok=True)
 
-    # RD, W の組ごとの飽和マップ
-    for (rd, w1, w2), sub in df.groupby(KEYS):
-        plot_summary(sub, rd, w1, w2)
+    # RD, W, L の組ごとの飽和マップ
+    for (rd, w1, w2, l1, l2), sub in df.groupby(KEYS):
+        plot_summary(sub, rd, w1, w2, l1, l2)
 
-    # RD ごとに、W の全組み合わせを並べた飽和マップ
-    for rd, rd_sub in df.groupby("RD_ohm"):
-        plot_overview(rd_sub, rd)
+    # RD, L1, L2 の組ごとに、W の全組み合わせを並べた飽和マップ
+    for (rd, l1, l2), ov_sub in df.groupby(OVERVIEW_KEYS):
+        plot_overview(ov_sub, rd, l1, l2)
 
-    # RD, W の組ごとに、利得が最大となる点を表示
+    # RD, W, L の組ごとに、利得が最大となる点を表示
     print()
     print("Max |gain| (all saturated):")
 
-    for (rd, w1, w2), sub in df.groupby(KEYS):
+    for (rd, w1, w2, l1, l2), sub in df.groupby(KEYS):
 
         best = find_max_gain(sub)
 
         if best is not None:
             print(
-                f"  {label(rd, w1, w2)}: {abs(best['gain']):.4g} V/V "
+                f"  {label(rd, w1, w2, l1, l2)}: {abs(best['gain']):.4g} V/V "
                 f"at Vb = {best['Vb_V']:.2f} V, Vin = {best['Vin_V']:.2f} V"
             )
         else:
-            print(f"  {label(rd, w1, w2)}: no all-saturated point")
+            print(f"  {label(rd, w1, w2, l1, l2)}: no all-saturated point")
