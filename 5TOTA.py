@@ -107,7 +107,9 @@ def modify_netlist_content(
         vdd_val=None,
         vb_val=None,
         vin_val=None,
-        w_val=None,
+        wn_val=None,
+        wp_val=None,
+        wtail_val=None,
         l_val=None
     ):
     """
@@ -143,29 +145,20 @@ def modify_netlist_content(
             flags=re.IGNORECASE
         )
 
-    # modify W (w_val = 差動対のW)
-    #   差動対 M1, M2 : W
-    #   カレントミラー M3, M4 (PMOS) : 2W (PMOSの移動度はNMOSの約半分)
-    #   テール電流源 M5 : 2W (差動対の2倍の電流を流す)
-    if w_val is not None:
-        wp_value = 2.0 * w_val
-        wn_value = w_val
-        wtail_value = 2.0 * w_val
+    # modify W (3種類のトランジスタで別々に指定する)
+    #   差動対 M1, M2 (NMOS)          : wn_val
+    #   カレントミラー M3, M4 (PMOS)  : wp_val
+    #   テール電流源 M5 (NMOS)        : wtail_val
+    if wn_val is not None:
+        content = replace_mos_parameter(content, "XM1", "W", wn_val)
+        content = replace_mos_parameter(content, "XM2", "W", wn_val)
 
-        # M1
-        content = replace_mos_parameter(content, "XM1", "W", wn_value)
+    if wp_val is not None:
+        content = replace_mos_parameter(content, "XM3", "W", wp_val)
+        content = replace_mos_parameter(content, "XM4", "W", wp_val)
 
-        # M2
-        content = replace_mos_parameter(content, "XM2", "W", wn_value)
-
-        # M3
-        content = replace_mos_parameter(content, "XM3", "W", wp_value)
-
-        # M4
-        content = replace_mos_parameter(content, "XM4", "W", wp_value)
-
-        # M5
-        content = replace_mos_parameter(content, "XM5", "W", wtail_value)
+    if wtail_val is not None:
+        content = replace_mos_parameter(content, "XM5", "W", wtail_val)
 
     # modify L
     if l_val is not None:
@@ -275,9 +268,9 @@ def is_saturated(params):
 
     return on and sat
 
-def simulate_point(template_content, work_dir, w, l, vb, vin):
+def simulate_point(template_content, work_dir, wn, wp, wtail, l, vb, vin):
     """
-    1つの (W, L, Vb, Vin) についてネットリスト作成 → ngspice実行 → 解析を行う。
+    1つの (Wn, Wp, Wtail, L, Vb, Vin) についてネットリスト作成 → ngspice実行 → 解析を行う。
     並列実行時に表示が混ざらないよう、ログは文字列で返す。
 
     作業用ネットリストは work_dir (コンテナ内の一時フォルダ) に作る。
@@ -285,16 +278,23 @@ def simulate_point(template_content, work_dir, w, l, vb, vin):
 
     戻り値: (row または None, ログ文字列)
     """
-    label = f"W = {w}u, L = {l}u, Vb = {vb:.2f}, Vin = {vin:.2f}V"
+    label = (
+        f"Wn = {wn}u, Wp = {wp}u, Wtail = {wtail}u, L = {l}u, "
+        f"Vb = {vb:.2f}, Vin = {vin:.2f}V"
+    )
     log = []
 
     # 条件ごとにファイル名が異なるので並列でも衝突しない
-    work_spice = os.path.join(work_dir, f"5tota_w_{w}_l_{l}_vb_{vb:.2f}_vin_{vin:.2f}.spice")
+    work_spice = os.path.join(
+        work_dir,
+        f"5tota_wn_{wn}_wp_{wp}_wt_{wtail}_l_{l}_vb_{vb:.2f}_vin_{vin:.2f}.spice"
+    )
 
     try:
         # パラメータをメモリ上で書き換えてから、1回だけ書き込む
         content = modify_netlist_content(
-            template_content, vb_val=vb, vin_val=vin, w_val=w, l_val=l
+            template_content, vb_val=vb, vin_val=vin,
+            wn_val=wn, wp_val=wp, wtail_val=wtail, l_val=l
         )
 
         with open(work_spice, 'w') as dst:
@@ -320,7 +320,9 @@ def simulate_point(template_content, work_dir, w, l, vb, vin):
         log.append(f" -> gain_dc = {gain_value:.4f} dB")
 
         row = {
-            "W_um": w,
+            "Wn_um": wn,
+            "Wp_um": wp,
+            "Wtail_um": wtail,
             "L_um": l,
             "Vb_V": vb,
             "Vin_V": vin,
@@ -370,8 +372,10 @@ if __name__ == "__main__":
     if spice_template and os.path.exists(spice_template):
         print(f"Base netlist generated: {spice_template}")
 
-        # 差動対の W [um] (カレントミラーとテールは自動で 2W になる)
-        w_list = [5.6, 11.2, 22.4, 44.8]
+        # W [um] (3種類のトランジスタで独立に振る)
+        wn_list = [5.6, 11.2, 22.4, 44.8]      # 差動対 M1, M2
+        wp_list = [5.6, 11.2, 22.4, 44.8]      # PMOS カレントミラー M3, M4
+        wtail_list = [5.6, 11.2, 22.4, 44.8]   # テール電流源 M5
 
         # L [um] (5つのトランジスタで共通)
         l_list = [0.28, 0.56, 1.12, 2.24]
@@ -390,8 +394,10 @@ if __name__ == "__main__":
 
         # 全条件の組み合わせ
         conditions = [
-            (w, l, round(float(vb), 2), round(float(vin), 2))
-            for w in w_list
+            (wn, wp, wtail, l, round(float(vb), 2), round(float(vin), 2))
+            for wn in wn_list
+            for wp in wp_list
+            for wtail in wtail_list
             for l in l_list
             for vb in vb_sweep
             for vin in vin_sweep
@@ -414,8 +420,11 @@ if __name__ == "__main__":
             with ThreadPoolExecutor(max_workers=num_workers) as executor:
 
                 futures = [
-                    executor.submit(simulate_point, template_content, work_dir, w, l, vb, vin)
-                    for w, l, vb, vin in conditions
+                    executor.submit(
+                        simulate_point, template_content, work_dir,
+                        wn, wp, wtail, l, vb, vin
+                    )
+                    for wn, wp, wtail, l, vb, vin in conditions
                 ]
 
                 for done, future in enumerate(as_completed(futures), 1):
@@ -437,12 +446,15 @@ if __name__ == "__main__":
             shutil.rmtree(work_dir, ignore_errors=True)
 
         # 完了順はバラバラなので、条件順に並べ直す
-        results.sort(key=lambda r: (r["W_um"], r["L_um"], r["Vb_V"], r["Vin_V"]))
+        results.sort(key=lambda r: (
+            r["Wn_um"], r["Wp_um"], r["Wtail_um"], r["L_um"], r["Vb_V"], r["Vin_V"]
+        ))
 
         # 計測終了
         elapsed_time = time.perf_counter() - start_time
 
-        csv_path = os.path.join(STUDY_DIR, "5tota_saturation_results.csv")
+        # W を共通にした旧データ (5tota_saturation_results.csv) は上書きしない
+        csv_path = os.path.join(STUDY_DIR, "5tota_wsplit_results.csv")
 
         with open(csv_path, "w", newline="") as f:
 
