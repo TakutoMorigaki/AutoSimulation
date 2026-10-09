@@ -51,8 +51,11 @@ SUMMARY_PATH = os.path.join(
 # 電源電圧 [V] (cascade.sch の .param vdd)
 VDD = 3.3
 
-# RD, W の組ごとに描き分けるための列
-KEYS = ["RD_ohm", "W1_um", "W2_um"]
+# RD, W, L の組ごとに描き分けるための列
+KEYS = ["RD_ohm", "W1_um", "W2_um", "L1_um", "L2_um"]
+
+# 一覧図 (W1 × W2) を1枚ずつ分ける列
+OVERVIEW_KEYS = ["RD_ohm", "L1_um", "L2_um"]
 
 # 線の色
 COLOR_1 = "tab:purple"   # ① M2 強反転
@@ -215,7 +218,12 @@ def draw_boundaries(ax, sub, p, with_label=True):
     ax.set_ylim(vb_min, vb_max)
 
 
-def plot_condition(sub, p, rd, w1, w2, score):
+def a_from_size(w1, w2, l1, l2):
+    """W/L の比から決まる理論上の a = sqrt((W2/L2) / (W1/L1))"""
+    return np.sqrt((w2 / l2) / (w1 / l1))
+
+
+def plot_condition(sub, p, rd, w1, w2, l1, l2, score):
 
     fig, ax = plt.subplots(figsize=(7, 5.5))
 
@@ -225,7 +233,8 @@ def plot_condition(sub, p, rd, w1, w2, score):
     ax.set_xlabel("Vin [V]")
     ax.set_ylabel("Vb [V]")
     ax.set_title(
-        f"Cascade  RD = {rd:g} ohm, W1 = {w1:g} um, W2 = {w2:g} um\n"
+        f"Cascade  RD = {rd:g} ohm, W1 = {w1:g} um, W2 = {w2:g} um, "
+        f"L1 = {l1:g} um, L2 = {l2:g} um\n"
         f"green: all saturated (simulation), lines: square-law prediction, "
         f"IoU = {score:.2f}",
         fontsize=10
@@ -233,7 +242,7 @@ def plot_condition(sub, p, rd, w1, w2, score):
     ax.legend(loc="upper left", fontsize=7)
 
     # 使ったパラメータを書いておく (理論上の a は W/L の比から)
-    a_theory = np.sqrt(w2 / w1)
+    a_theory = a_from_size(w1, w2, l1, l2)
 
     ax.text(
         0.98,
@@ -242,7 +251,7 @@ def plot_condition(sub, p, rd, w1, w2, score):
         f"Vth2 = {p['Vth2']:.3f} V\n"
         f"K1 = {p['K1'] * 1e3:.3f} mA/V$^2$\n"
         f"K2 = {p['K2'] * 1e3:.3f} mA/V$^2$\n"
-        f"a = {p['a']:.2f} (W ratio: {a_theory:.2f})",
+        f"a = {p['a']:.2f} (W/L ratio: {a_theory:.2f})",
         transform=ax.transAxes,
         ha="right",
         va="bottom",
@@ -254,7 +263,7 @@ def plot_condition(sub, p, rd, w1, w2, score):
 
     path = os.path.join(
         OUT_DIR,
-        f"cascade_boundary_rd_{rd:g}_w1_{w1:g}_w2_{w2:g}.png"
+        f"cascade_boundary_rd_{rd:g}_w1_{w1:g}_w2_{w2:g}_l1_{l1:g}_l2_{l2:g}.png"
     )
 
     fig.savefig(path, dpi=300, bbox_inches="tight")
@@ -263,9 +272,9 @@ def plot_condition(sub, p, rd, w1, w2, score):
     print(f"Saved: {path}")
 
 
-def plot_overview(rd_sub, rd, params):
+def plot_overview(rd_sub, rd, l1, l2, params):
     """
-    RD 1つ分について、W1 (行) × W2 (列) の全組み合わせを1枚に並べる
+    RD, L1, L2 の組1つ分について、W1 (行) × W2 (列) の全組み合わせを1枚に並べる
     """
 
     w1_list = sorted(rd_sub["W1_um"].unique())
@@ -286,7 +295,7 @@ def plot_overview(rd_sub, rd, params):
 
             ax = axes[i, j]
             sub = rd_sub[(rd_sub["W1_um"] == w1) & (rd_sub["W2_um"] == w2)]
-            p = params.get((rd, w1, w2))
+            p = params.get((rd, w1, w2, l1, l2))
 
             if sub.empty:
                 ax.set_visible(False)
@@ -312,14 +321,15 @@ def plot_overview(rd_sub, rd, params):
         ax.set_ylabel("Vb [V]")
 
     fig.suptitle(
-        f"Cascade saturation region vs square-law boundaries, RD = {rd:g} ohm\n"
+        f"Cascade saturation region vs square-law boundaries, RD = {rd:g} ohm, "
+        f"L1 = {l1:g} um, L2 = {l2:g} um\n"
         "(purple: M2 on, blue: M2 sat, red: M1 sat; rows: W1, columns: W2 [um])"
     )
     fig.tight_layout()
 
     path = os.path.join(
         OUT_DIR,
-        f"cascade_boundary_all_rd_{rd:g}.png"
+        f"cascade_boundary_all_rd_{rd:g}_l1_{l1:g}_l2_{l2:g}.png"
     )
 
     fig.savefig(path, dpi=300, bbox_inches="tight")
@@ -336,6 +346,12 @@ if __name__ == "__main__":
 
     df = pd.read_csv(CSV_PATH)
 
+    if not all(key in df.columns for key in KEYS):
+        raise SystemExit(
+            "CSVに RD_ohm, W1_um, W2_um, L1_um, L2_um の列がありません。"
+            "最新の cascade.py でシミュレーションし直してください。"
+        )
+
     # 浮動小数点の誤差を丸める
     for col in KEYS + ["Vb_V", "Vin_V"]:
         df[col] = df[col].round(3)
@@ -345,36 +361,41 @@ if __name__ == "__main__":
     params = {}
     summary = []
 
-    # RD, W の組ごとに、パラメータを取り出して重ね描き
-    for (rd, w1, w2), sub in df.groupby(KEYS):
+    # RD, W, L の組ごとに、パラメータを取り出して重ね描き
+    for (rd, w1, w2, l1, l2), sub in df.groupby(KEYS):
 
         p = boundary_params(sub, rd)
 
         if p is None:
-            print(f"WARNING: RD = {rd:g}, W1 = {w1:g}, W2 = {w2:g} はパラメータを取り出せません")
+            print(
+                f"WARNING: RD = {rd:g}, W1 = {w1:g}, W2 = {w2:g}, "
+                f"L1 = {l1:g}, L2 = {l2:g} はパラメータを取り出せません"
+            )
             continue
 
         score = iou(sub, p)
 
-        params[(rd, w1, w2)] = p
-        plot_condition(sub, p, rd, w1, w2, score)
+        params[(rd, w1, w2, l1, l2)] = p
+        plot_condition(sub, p, rd, w1, w2, l1, l2, score)
 
         summary.append({
             "RD_ohm": rd,
             "W1_um": w1,
             "W2_um": w2,
+            "L1_um": l1,
+            "L2_um": l2,
             "Vth1_V": p["Vth1"],
             "Vth2_V": p["Vth2"],
             "K1_A_per_V2": p["K1"],
             "K2_A_per_V2": p["K2"],
             "a_fit": p["a"],
-            "a_W_ratio": np.sqrt(w2 / w1),
+            "a_WL_ratio": a_from_size(w1, w2, l1, l2),
             "IoU": score
         })
 
-    # RD ごとに一覧図
-    for rd, rd_sub in df.groupby("RD_ohm"):
-        plot_overview(rd_sub, rd, params)
+    # RD, L1, L2 の組ごとに一覧図
+    for (rd, l1, l2), ov_sub in df.groupby(OVERVIEW_KEYS):
+        plot_overview(ov_sub, rd, l1, l2, params)
 
     pd.DataFrame(summary).to_csv(SUMMARY_PATH, index=False)
     print(f"Saved: {SUMMARY_PATH}")
@@ -385,8 +406,9 @@ if __name__ == "__main__":
 
     for s in summary:
         print(
-            f"  RD = {s['RD_ohm']:g}, W1 = {s['W1_um']:g}, W2 = {s['W2_um']:g}: "
+            f"  RD = {s['RD_ohm']:g}, W1 = {s['W1_um']:g}, W2 = {s['W2_um']:g}, "
+            f"L1 = {s['L1_um']:g}, L2 = {s['L2_um']:g}: "
             f"Vth1 = {s['Vth1_V']:.3f}, Vth2 = {s['Vth2_V']:.3f}, "
             f"K1 = {s['K1_A_per_V2'] * 1e3:.3f}, K2 = {s['K2_A_per_V2'] * 1e3:.3f} mA/V^2, "
-            f"a = {s['a_fit']:.2f} (W ratio {s['a_W_ratio']:.2f}), IoU = {s['IoU']:.2f}"
+            f"a = {s['a_fit']:.2f} (W/L ratio {s['a_WL_ratio']:.2f}), IoU = {s['IoU']:.2f}"
         )
