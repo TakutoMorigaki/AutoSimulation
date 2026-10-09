@@ -7,8 +7,8 @@ import matplotlib.pyplot as plt
 # ============================================================
 # cascade 回路のヘッドルームの可視化
 #
-#   cascade_results.csv (cascade.py の出力) から、代表的な Vb について
-#   Vin–Vout 特性を取り出し、
+#   cascade_results.csv (cascade.py の出力) から、RD, W, L の組ごとに
+#   代表的な Vb について Vin–Vout 特性を取り出し、
 #     ② 出力振幅 : 全トランジスタが飽和している Vout の範囲
 #     ③ 動作点の余裕 : 動作点での |Vds| - |Vdsat|
 #   を図にする。新たなシミュレーションは行わない。
@@ -40,14 +40,10 @@ OUT_DIR = os.path.join(
     "cascade_headroom"
 )
 
+# 全組の結果をまとめた CSV
 SUMMARY_PATH = os.path.join(
     OUT_DIR,
     "cascade_headroom_summary.csv"
-)
-
-SWING_PATH = os.path.join(
-    OUT_DIR,
-    "cascade_headroom_swing.png"
 )
 
 
@@ -55,19 +51,71 @@ SWING_PATH = os.path.join(
 # 対象とする条件
 # ============================================================
 
-# 回路定数 (1組だけ見る)
-RD_OHM = 2000
-W1_UM = 11.2
-W2_UM = 11.2
+# 回路定数 (リストの全組み合わせを処理する。None なら CSV にある値すべて)
+RD_LIST = [10000]
+W1_LIST = [5.6, 11.2, 22.4, 44.8]
+W2_LIST = [5.6, 11.2, 22.4, 44.8]
+L1_LIST = [0.28, 0.56, 1.12]
+L2_LIST = [0.28, 0.56, 1.12]
 
 # 代表的な Vb [V]
-#   1.20 : 低め
-#   2.00 : 出力振幅が最大
-#   2.34 : 利得 |dVout/dVin| が最大
-#   2.80 : 高め
-VB_LIST = [1.20, 2.00, 2.34, 2.80]
+#   None : 組ごとに飽和マップから自動で選ぶ (select_vb_list を参照)
+#   リスト : すべての組で同じ Vb を使う (例: [1.20, 2.00, 2.34, 2.80])
+VB_LIST = None
+
+KEYS = ["RD_ohm", "W1_um", "W2_um", "L1_um", "L2_um"]
 
 TRANSISTORS = ["M1", "M2"]
+
+
+# ============================================================
+# 条件の表示
+# ============================================================
+
+def cond_label(rd, w1, w2, l1, l2):
+    return (
+        f"RD = {rd:g} ohm, W1 = {w1:g} um, W2 = {w2:g} um, "
+        f"L1 = {l1:g} um, L2 = {l2:g} um"
+    )
+
+
+def cond_tag(rd, w1, w2, l1, l2):
+    return f"rd_{rd:g}_w1_{w1:g}_w2_{w2:g}_l1_{l1:g}_l2_{l2:g}"
+
+
+# ============================================================
+# 読み込み
+# ============================================================
+
+def load_csv():
+    """
+    CSV が大きいので、少しずつ読みながら対象の条件の行だけを残す
+    """
+
+    lists = [RD_LIST, W1_LIST, W2_LIST, L1_LIST, L2_LIST]
+    chunks = []
+
+    for chunk in pd.read_csv(CSV_PATH, chunksize=200000):
+
+        if not all(key in chunk.columns for key in KEYS):
+            raise SystemExit(
+                "CSVに RD_ohm, W1_um, W2_um, L1_um, L2_um の列がありません。"
+                "最新の cascade.py でシミュレーションし直してください。"
+            )
+
+        # 浮動小数点の誤差を丸める
+        for col in KEYS + ["Vb_V", "Vin_V"]:
+            chunk[col] = chunk[col].round(3)
+
+        mask = np.ones(len(chunk), dtype=bool)
+
+        for key, values in zip(KEYS, lists):
+            if values is not None:
+                mask &= chunk[key].isin([round(v, 3) for v in values]).to_numpy()
+
+        chunks.append(chunk[mask])
+
+    return pd.concat(chunks, ignore_index=True)
 
 
 # ============================================================
@@ -95,6 +143,48 @@ def load_condition(df, vb):
         )
 
     return sub.reset_index(drop=True)
+
+
+def select_vb_list(cond_df):
+    """
+    1つの組について、代表的な Vb を飽和マップから選ぶ
+
+      ・飽和点がある Vb の範囲の 1/4 と 3/4 の位置 (低め・高め)
+      ・出力振幅が最大の Vb
+      ・利得 |dVout/dVin| が最大の Vb
+    """
+
+    swing = {}
+    gain = {}
+
+    for vb in sorted(cond_df["Vb_V"].unique()):
+
+        sub = load_condition(cond_df, vb)
+        sat = sub[sub["all_sat"] == 1]
+
+        if sat.empty:
+            continue
+
+        swing[vb] = sat["Vout_V"].max() - sat["Vout_V"].min()
+        gain[vb] = sat["gain"].abs().max()
+
+    if not swing:
+        return []
+
+    vbs = np.array(sorted(swing))
+    lo, hi = vbs.min(), vbs.max()
+
+    def nearest(v):
+        return vbs[np.abs(vbs - v).argmin()]
+
+    picks = {
+        nearest(lo + 0.25 * (hi - lo)),
+        max(swing, key=swing.get),
+        max(gain, key=gain.get),
+        nearest(lo + 0.75 * (hi - lo)),
+    }
+
+    return sorted(float(v) for v in picks)
 
 
 def unsaturated_neighbor(sub, i):
@@ -166,112 +256,10 @@ def analyze(sub, vb):
 
 
 # ============================================================
-# 図
+# 図 (組ごと)
 # ============================================================
 
-def shade_saturation(ax, sub):
-
-    ax.fill_between(
-        sub["Vin_V"],
-        0,
-        1,
-        where=sub["all_sat"].to_numpy() == 1,
-        transform=ax.get_xaxis_transform(),
-        color="tab:green",
-        alpha=0.15,
-        step="mid",
-        label="All saturated"
-    )
-
-
-def plot_condition(sub, res):
-
-    vb = res["Vb_V"]
-
-    fig, axes = plt.subplots(
-        3,
-        1,
-        figsize=(8, 10),
-        sharex=True
-    )
-
-    # ---- Vout ----
-    ax = axes[0]
-    shade_saturation(ax, sub)
-    ax.plot(sub["Vin_V"], sub["Vout_V"], color="black")
-
-    for key, text in [("Vout_swing_max_V", "max"), ("Vout_swing_min_V", "min")]:
-        ax.axhline(res[key], color="tab:red", linestyle="--", linewidth=1)
-        ax.annotate(
-            f"{text} {res[key]:.3f} V",
-            xy=(1.0, res[key]),
-            xycoords=("axes fraction", "data"),
-            xytext=(4, 0),
-            textcoords="offset points",
-            va="center",
-            fontsize=8,
-            color="tab:red"
-        )
-
-    ax.plot(
-        res["op_Vin_V"],
-        res["op_Vout_V"],
-        marker="o",
-        color="tab:red",
-        linestyle="none",
-        label=f"Operating point (Vin = {res['op_Vin_V']:.2f} V)"
-    )
-
-    ax.set_ylabel("Vout [V]")
-    ax.set_title(
-        f"Cascade  Vb = {vb:.2f} V  "
-        f"(RD = {RD_OHM:g} ohm, W1 = {W1_UM:g} um, W2 = {W2_UM:g} um)\n"
-        f"Output swing {res['Vout_swing_V']:.3f} V"
-    )
-    ax.legend(loc="best", fontsize=8)
-    ax.grid(True, alpha=0.3)
-
-    # ---- 飽和マージン ----
-    ax = axes[1]
-    shade_saturation(ax, sub)
-
-    for name in TRANSISTORS:
-        ax.plot(sub["Vin_V"], sub[f"{name}_margin"], label=name)
-
-    ax.axhline(0, color="gray", linestyle="--", linewidth=1)
-    ax.axvline(res["op_Vin_V"], color="tab:red", linestyle=":", linewidth=1)
-    ax.set_ylabel("|Vds| - |Vdsat| [V]")
-    ax.set_title(
-        f"Margin at operating point: min {res['op_min_margin_V']:.3f} V "
-        f"({res['op_bottleneck']})",
-        fontsize=9
-    )
-    ax.legend(loc="best", fontsize=8)
-    ax.grid(True, alpha=0.3)
-
-    # ---- ゲイン ----
-    ax = axes[2]
-    shade_saturation(ax, sub)
-    ax.plot(sub["Vin_V"], sub["gain"], color="tab:blue")
-    ax.axvline(res["op_Vin_V"], color="tab:red", linestyle=":", linewidth=1)
-    ax.set_ylabel("dVout/dVin [V/V]")
-    ax.set_xlabel("Vin [V]")
-    ax.grid(True, alpha=0.3)
-
-    fig.tight_layout()
-
-    path = os.path.join(
-        OUT_DIR,
-        f"cascade_headroom_vb_{vb:.2f}.png"
-    )
-
-    fig.savefig(path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
-
-    print(f"Saved: {path}")
-
-
-def plot_swing_summary(results):
+def plot_swing_summary(results, label, tag):
     """
     代表点ごとの出力振幅を縦棒で並べ、動作点と余裕を書き込む
     """
@@ -311,15 +299,115 @@ def plot_swing_summary(results):
     ax.set_ylabel("Vout [V]")
     ax.set_title(
         "Cascade output swing (bar: all saturated, dot: operating point)\n"
-        f"RD = {RD_OHM:g} ohm, W1 = {W1_UM:g} um, W2 = {W2_UM:g} um"
+        f"{label}",
+        fontsize=10
     )
     ax.grid(True, axis="y", alpha=0.3)
 
     fig.tight_layout()
-    fig.savefig(SWING_PATH, dpi=300, bbox_inches="tight")
+
+    path = os.path.join(OUT_DIR, f"cascade_headroom_swing_{tag}.png")
+
+    fig.savefig(path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
-    print(f"Saved: {SWING_PATH}")
+    print(f"Saved: {path}")
+
+
+# ============================================================
+# 図 (組どうしの比較)
+# ============================================================
+
+def plot_compare(summary):
+    """
+    RD, L1, L2 の組ごとに、W1 (行) × W2 (列) の最大出力振幅を並べる
+    (各組で、代表 Vb のうち出力振幅が最大のものを使う)
+    """
+
+    best = (
+        summary.sort_values("Vout_swing_V", ascending=False)
+        .groupby(KEYS, as_index=False)
+        .first()
+    )
+
+    vmax = best["Vout_swing_V"].max()
+
+    for (rd, l1, l2), sub in best.groupby(["RD_ohm", "L1_um", "L2_um"]):
+
+        grid = sub.pivot_table(
+            index="W1_um",
+            columns="W2_um",
+            values="Vout_swing_V",
+            aggfunc="first"
+        )
+
+        w1_list = grid.index.to_numpy()
+        w2_list = grid.columns.to_numpy()
+
+        fig, ax = plt.subplots(
+            figsize=(1.6 * len(w2_list) + 2.5, 1.3 * len(w1_list) + 1.8)
+        )
+
+        # 組どうしを比べられるよう、色の範囲は全組で共通にする
+        image = ax.imshow(
+            grid.to_numpy(),
+            cmap="Blues",
+            vmin=0,
+            vmax=vmax,
+            aspect="auto"
+        )
+
+        for i, w1 in enumerate(w1_list):
+
+            for j, w2 in enumerate(w2_list):
+
+                hit = sub[(sub["W1_um"] == w1) & (sub["W2_um"] == w2)]
+
+                if hit.empty:
+                    continue
+
+                r = hit.iloc[0]
+                color = "white" if r["Vout_swing_V"] > 0.6 * vmax else "black"
+
+                ax.text(
+                    j,
+                    i,
+                    f"{r['Vout_swing_V']:.2f} V\n"
+                    f"Vb = {r['Vb_V']:.2f}\n"
+                    f"|gain| {abs(r['op_gain']):.2f}",
+                    ha="center",
+                    va="center",
+                    fontsize=7,
+                    color=color
+                )
+
+        ax.set_xticks(range(len(w2_list)))
+        ax.set_xticklabels([f"{w:g}" for w in w2_list])
+        ax.set_yticks(range(len(w1_list)))
+        ax.set_yticklabels([f"{w:g}" for w in w1_list])
+        ax.set_xlabel("W2 [um]")
+        ax.set_ylabel("W1 [um]")
+
+        cbar = fig.colorbar(image, ax=ax)
+        cbar.set_label("Max output swing [V]")
+
+        ax.set_title(
+            "Cascade max output swing (best of representative Vb)\n"
+            f"RD = {rd:g} ohm, L1 = {l1:g} um, L2 = {l2:g} um",
+            fontsize=10
+        )
+
+        fig.tight_layout()
+
+        path = os.path.join(
+            OUT_DIR,
+            f"cascade_headroom_compare_rd_{rd:g}_l1_{l1:g}_l2_{l2:g}.png"
+        )
+
+        fig.savefig(path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+
+        print(f"Saved: {path}")
 
 
 # ============================================================
@@ -328,62 +416,68 @@ def plot_swing_summary(results):
 
 if __name__ == "__main__":
 
-    df = pd.read_csv(CSV_PATH)
-
-    # 浮動小数点の誤差を丸める
-    for col in ["RD_ohm", "W1_um", "W2_um", "Vb_V", "Vin_V"]:
-        df[col] = df[col].round(3)
-
-    df = df[
-        (df["RD_ohm"] == RD_OHM)
-        & (df["W1_um"] == W1_UM)
-        & (df["W2_um"] == W2_UM)
-    ]
+    df = load_csv()
 
     if df.empty:
-        raise SystemExit(
-            f"RD = {RD_OHM:g}, W1 = {W1_UM:g}, W2 = {W2_UM:g} のデータが CSV にありません"
-        )
+        raise SystemExit("指定した RD, W, L の組のデータが CSV にありません")
 
     os.makedirs(OUT_DIR, exist_ok=True)
 
-    results = []
+    summary = []
 
-    for vb in VB_LIST:
+    for (rd, w1, w2, l1, l2), cond_df in df.groupby(KEYS):
 
-        sub = load_condition(df, vb)
+        label = cond_label(rd, w1, w2, l1, l2)
 
-        if sub.empty:
-            print(f"WARNING: Vb = {vb:.2f} V のデータがありません")
+        print(f"\n{label}")
+
+        vb_list = VB_LIST if VB_LIST is not None else select_vb_list(cond_df)
+
+        results = []
+
+        for vb in vb_list:
+
+            sub = load_condition(cond_df, vb)
+
+            if sub.empty:
+                print(f"WARNING: Vb = {vb:.2f} V のデータがありません")
+                continue
+
+            res = analyze(sub, vb)
+
+            if res is None:
+                print(f"WARNING: Vb = {vb:.2f} V に全トランジスタ飽和の点がありません")
+                continue
+
+            results.append(res)
+
+        if not results:
+            print("WARNING: 解析できる Vb がありませんでした")
             continue
 
-        res = analyze(sub, vb)
+        plot_swing_summary(results, label, cond_tag(rd, w1, w2, l1, l2))
 
-        if res is None:
-            print(f"WARNING: Vb = {vb:.2f} V に全トランジスタ飽和の点がありません")
-            continue
+        for res in results:
+            summary.append({
+                "RD_ohm": rd, "W1_um": w1, "W2_um": w2, "L1_um": l1, "L2_um": l2,
+                **res
+            })
 
-        plot_condition(sub, res)
-        results.append(res)
+            print(
+                f"  Vb = {res['Vb_V']:.2f} V: "
+                f"Vout {res['Vout_swing_min_V']:.3f} ~ {res['Vout_swing_max_V']:.3f} V "
+                f"(swing {res['Vout_swing_V']:.3f} V, "
+                f"limited by {res['limit_at_min']} / {res['limit_at_max']}), "
+                f"op margin {res['op_min_margin_V']:.3f} V ({res['op_bottleneck']}), "
+                f"op |gain| {abs(res['op_gain']):.3f}"
+            )
 
-    if not results:
-        raise SystemExit("解析できる Vb がありませんでした")
+    if not summary:
+        raise SystemExit("解析できる組がありませんでした")
 
-    plot_swing_summary(results)
+    summary = pd.DataFrame(summary)
+    summary.to_csv(SUMMARY_PATH, index=False)
+    print(f"\nSaved: {SUMMARY_PATH}")
 
-    pd.DataFrame(results).to_csv(SUMMARY_PATH, index=False)
-    print(f"Saved: {SUMMARY_PATH}")
-
-    # 結果を表示
-    print()
-    print("Headroom summary:")
-
-    for res in results:
-        print(
-            f"  Vb = {res['Vb_V']:.2f} V: "
-            f"Vout {res['Vout_swing_min_V']:.3f} ~ {res['Vout_swing_max_V']:.3f} V "
-            f"(swing {res['Vout_swing_V']:.3f} V, "
-            f"limited by {res['limit_at_min']} / {res['limit_at_max']}), "
-            f"op margin {res['op_min_margin_V']:.3f} V ({res['op_bottleneck']}), "
-            f"op |gain| {abs(res['op_gain']):.3f}"
-        )
+    # 組どうしの比較図
+    plot_compare(summary)
