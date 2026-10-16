@@ -101,14 +101,14 @@ TEST_CSV = os.path.join(STUDY_DIR, "opamp_results.csv")
 
 # 振る範囲: (下限, 上限, log で振るか, 丸める小数点以下の桁数)
 PARAM_SPACE = {
-    "Win_um": (5.6, 44.8, True, 2),     # PMOS 差動対 M1, M2
-    "Wload_um": (5.6, 44.8, True, 2),   # NMOS 負荷ミラー M3, M4
-    "Wtail_um": (5.6, 44.8, True, 2),   # PMOS テール M5
-    "W6_um": (5.6, 22.4, True, 2),      # 2段目 PMOS 電流源 M6
-    "W7_um": (5.6, 22.4, True, 2),      # 2段目 NMOS ソース接地 M7
-    "Wbp_um": (5.6, 22.4, True, 2),     # バイアス PMOS M8, M9
-    "Wbn_um": (5.6, 22.4, True, 2),     # バイアス NMOS M10, M11
-    "L_um": (0.28, 2.24, True, 2),      # L (M1～M12 で共通)
+    "Win_um": (5.0, 45.5, True, 2),     # PMOS 差動対 M1, M2
+    "Wload_um": (5.0, 45.5, True, 2),   # NMOS 負荷ミラー M3, M4
+    "Wtail_um": (5.0, 45.5, True, 2),   # PMOS テール M5
+    "W6_um": (5.0, 23.5, True, 2),      # 2段目 PMOS 電流源 M6
+    "W7_um": (5.0, 23.5, True, 2),      # 2段目 NMOS ソース接地 M7
+    "Wbp_um": (5.0, 23.5, True, 2),     # バイアス PMOS M8, M9
+    "Wbn_um": (5.0, 23.5, True, 2),     # バイアス NMOS M10, M11
+    "L_um": (0.28, 2.4, True, 2),      # L (M1～M12 で共通)
     "Ibias_uA": (1.0, 45.0, True, 2),
     "Vin_V": (0.1, 3.3, False, 3),
 }
@@ -472,6 +472,7 @@ def load_test():
 def plot_rounds(rounds, path):
     """
     点数 vs change_rate / est_err / テスト誤り率
+    (コンテナに日本語フォントが無いので、図の文字は英語にする)
     """
 
     df = pd.DataFrame(rounds)
@@ -479,20 +480,20 @@ def plot_rounds(rounds, path):
     fig, ax = plt.subplots(figsize=(6.5, 4.5))
 
     ax.plot(df["n_labeled"], df["change_rate"], marker="o", ms=3,
-            color="#d62728", label="change_rate (停止に使う)")
+            color="#d62728", label="change_rate (stop criterion)")
     ax.plot(df["n_labeled"], df["est_err"], marker="s", ms=3,
-            color="#1f77b4", label="est_err (ランダム点での誤り率)")
+            color="#1f77b4", label="est_err (error on random points)")
 
     if "test_acc" in df and df["test_acc"].notna().any():
         ax.plot(df["n_labeled"], 1 - df["test_acc"], ls="--",
-                color="k", label="既存グリッドでの誤り率")
+                color="k", label="error on existing grid")
 
     ax.axhline(TARGET_ERR, color="gray", ls=":",
-               label=f"停止しきい値 {TARGET_ERR}")
+               label=f"threshold {TARGET_ERR}")
 
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.set_xlabel("シミュレーション回数")
+    ax.set_xlabel("number of simulations")
     ax.grid(alpha=0.3, which="both")
     ax.legend(fontsize=8)
 
@@ -510,11 +511,6 @@ def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     os.makedirs(STOP_PRED_DIR, exist_ok=True)
     os.makedirs(MODEL_DIR, exist_ok=True)
-
-    plt.rcParams["font.family"] = [
-        "Yu Gothic", "Meiryo", "Noto Sans CJK JP", "IPAexGothic",
-        "sans-serif"
-    ]
 
     # 基準となるネットリスト
     spice_template = export_netlist(SCH_PATH, NETLIST_DIR)
