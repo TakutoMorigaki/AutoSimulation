@@ -115,7 +115,7 @@ BATCH = 500
 BUDGET = int(os.environ.get("AL_BUDGET", 20000))
 
 # 乱数を変えて繰り返す回数 (結果のばらつきを見る)
-N_REPEATS = int(os.environ.get("AL_REPEATS", 1))
+N_REPEATS = int(os.environ.get("AL_REPEATS", 3))
 
 # active で使う MLP の個数
 ENSEMBLE_SIZE = 5

@@ -129,7 +129,7 @@ BATCH_GROWTH = 0.1
 BUDGET = int(os.environ.get("AL_BUDGET", 60000))
 
 # 乱数を変えて繰り返す回数 (結果のばらつきを見る)
-N_REPEATS = int(os.environ.get("AL_REPEATS", 1))
+N_REPEATS = int(os.environ.get("AL_REPEATS", 3))
 
 # 実行する方法
 STRATEGIES = os.environ.get("AL_STRATEGIES", "random,active").split(",")
