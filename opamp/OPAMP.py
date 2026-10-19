@@ -41,7 +41,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # パスの定義（sourceフォルダから見た相対パス）
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, ".."))
+PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, "..", ".."))
 
 STUDY_DIR = os.path.join(PROJECT_ROOT, "study")
 NETLIST_DIR = os.path.join(STUDY_DIR, "netlists") # 自動生成されるネットリストの保存先

@@ -12,7 +12,7 @@ from matplotlib.colors import ListedColormap
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(
-    os.path.join(BASE_DIR, "..")
+    os.path.join(BASE_DIR, "..", "..")
 )
 
 STUDY_DIR = os.path.join(

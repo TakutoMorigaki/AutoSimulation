@@ -6,7 +6,7 @@ import csv
 
 # パスの定義（sourceフォルダから見た相対パス）
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, ".."))
+PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, "..", ".."))
 
 STUDY_DIR = os.path.join(PROJECT_ROOT, "study")
 NETLIST_DIR = os.path.join(STUDY_DIR, "netlists") # 自動生成されるネットリストの保存先
@@ -207,6 +207,28 @@ def extract_measure_results(stdout_text):
 
     return results
 
+W_SWEEP = [
+    5.6,
+    8.4,
+    11.2,
+    16.8,
+    22.4,
+    33.6,
+    44.8
+]
+
+L_SWEEP = [
+    0.28,
+    0.35,
+    0.50,
+    0.70,
+    1.00,
+    1.50,
+    2.00
+]
+
+vdd = 3.3
+
 if __name__ == "__main__":
     print(f"Working Directory: {BASE_DIR}")
     print(f"Target Schematic: {SCH_PATH}")
@@ -217,56 +239,63 @@ if __name__ == "__main__":
     if spice_template and os.path.exists(spice_template):
         print(f"Base netlist generated: {spice_template}")
         
-        # VDDが0VだとDC収束エラーになりやすいため、動作下限付近（例: 0.6V〜3.0V）からスイープする
-        vdd_sweep = np.arange(0.6, 4.0, 0.1)
-        results = {}
+        results = []
         
-        for vdd in vdd_sweep:
-            vdd = round(float(vdd), 2)
-            work_spice = os.path.join(NETLIST_DIR, f"5tota_vdd_{vdd:.2f}.spice")
-            
-            # テンプレートから作業用ネットリストをコピー
-            with open(spice_template, 'r') as src, open(work_spice, 'w') as dst:
-                dst.write(src.read())
-            
-            # パラメータ書き換え
-            modify_netlist_params(work_spice, vdd_val=vdd)
-            print(work_spice)
-            
-            # シミュレーション実行
-            success, stdout = run_ngspice(work_spice)
-            if success:
-                print(f"VDD = {vdd:.2f}V: Simulation Success")
-                print(stdout)
+        for w in W_SWEEP:
+            for l in L_SWEEP:
+                vdd = round(float(vdd), 2)
+                work_spice = os.path.join(NETLIST_DIR, f"5tota_W{w:.2f}_{l:.2f}.spice")
+                
+                # テンプレートから作業用ネットリストをコピー
+                with open(spice_template, 'r') as src, open(work_spice, 'w') as dst:
+                    dst.write(src.read())
+                
+                # パラメータ書き換え
+                modify_netlist_params(work_spice, vdd_val=vdd, w_val=w, l_val=l)
+                print(work_spice)
+                
+                # シミュレーション実行
+                success, stdout = run_ngspice(work_spice)
+                if success:
+                    print(f"W/L = {w:.2f}/{l:.2f}: Simulation Success")
 
-                meas_results = extract_measure_results(stdout)
+                    meas_results = extract_measure_results(stdout)
 
-                if 'gain_dc' in meas_results:
-                    gain_value = meas_results['gain_dc']
-                    results[vdd] = gain_value
-                    print(f" -> gain_dc = {gain_value:.4f} dB")
+                    if 'gain_dc' in meas_results:
+                        gain_value = meas_results['gain_dc']
+                        print(f" -> gain_dc = {gain_value:.4f} dB")
+                        results.append([
+                            w,
+                            2.0*w,
+                            2.0*w,
+                            l,
+                            gain_value
+                        ])
 
-            else:
-                print(f"VDD = {vdd:.2f}V: Simulation Failed")
+                else:
+                    print(f"W/L = {w:.2f}/{l:.2f}: Simulation Failed")
+                    results.append([
+                        w,
+                        2.0*w,
+                        2.0,w,
+                        l,
+                        ""
+                    ])
 
-            # if os.path.exists(work_spice):
-            #     os.remove(work_spice)
-
-        csv_path = os.path.join(STUDY_DIR, "vdd_gain_results.csv")
+        csv_path = os.path.join(STUDY_DIR, "wl_gain_results.csv")
 
         with open(csv_path, "w", newline="") as f:
             writer = csv.writer(f)
 
             writer.writerow([
-                "VDD_V",
+                "Wn_um",
+                "Wp_um",
+                "Wtail_um",
+                "L_um",
                 "gain_dc_dB"
             ])
 
-            for vdd, gain in results.items():
-                writer.writerow([
-                    vdd,
-                    gain
-                ])
+            writer.writerows(results)
 
             print(f"CSV saved: {csv_path}")
 

@@ -28,13 +28,12 @@ from sklearn.metrics import (
 #
 #   LightGBM / MLP / ロジスティック回帰 / SVM (RBF)
 #
-#   入力 : Wn, Wp, Wtail, L, Vb, Vin   (W, L は log を取る)
-#          Wn: 差動対 M1, M2 / Wp: PMOS カレントミラー M3, M4 / Wtail: テール M5
-#          (3種類の W を独立に振ったデータ 5tota_wsplit_results.csv を使う)
+#   入力 : W, L, Vb, Vin   (W, L は log を取る)
+#          (M3～M5 の W は差動対の W から決まるので、設計の自由度は W, L だけ)
 #   出力 : all_sat (1 = M1, M2 とも飽和)
 #
 #   gain_dc_dB, vds, vdsat などシミュレーションの出力は入力に入れない。
-#   評価は「学習に使っていない (Wn, Wp, Wtail, L) の組」で行う。
+#   評価は「学習に使っていない (W, L) の組」で行う。
 # ============================================================
 
 
@@ -44,7 +43,7 @@ from sklearn.metrics import (
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(
-    os.path.join(BASE_DIR, "..")
+    os.path.join(BASE_DIR, "..", "..")
 )
 
 STUDY_DIR = os.path.join(
@@ -54,13 +53,13 @@ STUDY_DIR = os.path.join(
 
 CSV_PATH = os.path.join(
     STUDY_DIR,
-    "5tota_wsplit_results.csv"
+    "5tota_saturation_results.csv"
 )
 
 # 結果の保存先
 OUT_DIR = os.path.join(
     STUDY_DIR,
-    "5tota_wsplit_classifier"
+    "5tota_classifier"
 )
 
 MODEL_DIR = os.path.join(
@@ -74,10 +73,10 @@ MODEL_DIR = os.path.join(
 # ============================================================
 
 # 設計 (W, L の組) を区別する列
-DESIGN_KEYS = ["Wn_um", "Wp_um", "Wtail_um", "L_um"]
+DESIGN_KEYS = ["W_um", "L_um"]
 
 # 入力にする列
-FEATURES = ["log_Wn", "log_Wp", "log_Wtail", "log_L", "Vb_V", "Vin_V"]
+FEATURES = ["log_W", "log_L", "Vb_V", "Vin_V"]
 
 LABEL = "all_sat"
 
@@ -104,7 +103,7 @@ def load_data():
 
     df = pd.read_csv(CSV_PATH)
 
-    for col in ["Wn", "Wp", "Wtail", "L"]:
+    for col in ["W", "L"]:
         df[f"log_{col}"] = np.log(df[f"{col}_um"])
 
     return df
@@ -112,7 +111,7 @@ def load_data():
 
 def split_by_design(df):
     """
-    (Wn, Wp, Wtail, L) の組単位で学習用とテスト用に分ける
+    (W, L) の組単位で学習用とテスト用に分ける
     """
 
     designs = df[DESIGN_KEYS].drop_duplicates().reset_index(drop=True)
@@ -326,8 +325,7 @@ def plot_design_maps(test, probs, design, path):
                bbox_to_anchor=(0.5, -0.02))
 
     fig.suptitle(
-        f"Wn={design['Wn_um']} Wp={design['Wp_um']} "
-        f"Wtail={design['Wtail_um']} L={design['L_um']} [um]  (テスト設計)"
+        f"W={design['W_um']} L={design['L_um']} [um]  (テスト設計)"
     )
     fig.tight_layout(rect=(0, 0.06, 1, 1))
     fig.savefig(path, dpi=130)
@@ -419,8 +417,7 @@ def main():
 
     for _, d in test_designs.iterrows():
         fname = (
-            f"map_wn_{d['Wn_um']}_wp_{d['Wp_um']}"
-            f"_wt_{d['Wtail_um']}_l_{d['L_um']}.png"
+            f"map_w_{d['W_um']}_l_{d['L_um']}.png"
         )
         plot_design_maps(test, probs, d, os.path.join(OUT_DIR, fname))
 

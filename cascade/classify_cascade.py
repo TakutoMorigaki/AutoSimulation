@@ -23,26 +23,16 @@ from sklearn.metrics import (
 
 
 # ============================================================
-# 2段オペアンプ (opamp.sch) で「全トランジスタ (M1～M11) が飽和するか (all_sat)」を
+# cascade 回路で「全トランジスタが飽和するか (all_sat)」を
 # 設計パラメータだけから予測する二値分類器を4種類比較する
 #
 #   LightGBM / MLP / ロジスティック回帰 / SVM (RBF)
 #
-#   入力 : 7種類の W, L, Ibias, Vin   (W, L, Ibias は log を取る)
-#          Win: PMOS 差動対 M1, M2 / Wload: NMOS 負荷ミラー M3, M4 / Wtail: PMOS テール M5
-#          W6: 2段目 PMOS 電流源 M6 / W7: 2段目 NMOS ソース接地 M7
-#          Wbp: バイアス PMOS M8, M9 / Wbn: バイアス NMOS M10, M11
-#          (OPAMP.py で作った opamp_results.csv を使う。M12 は all_sat に含まれない)
-#   出力 : all_sat (1 = M1～M11 がすべて飽和)
+#   入力 : W1, W2, L1, L2, Vb, Vin   (W, L は log を取る)
+#   出力 : all_sat (1 = M1, M2 とも飽和)
 #
-#   gain_dc_dB, vds, vdsat などシミュレーションの出力は入力に入れない。
-#   評価は「学習に使っていない W, L の組」で行う。
-#
-#   データが約3000万行あるので、
-#     - CSV から必要な列だけを float32 で読む
-#     - MLP, ロジスティック回帰, SVM は学習データを間引く (LightGBM は全部使う)
-#     - 予測は PREDICT_CHUNK 行ずつに分ける
-#     - 比較図は誤りの多い MAX_MAPS 個の設計だけ描く
+#   Vout, vds, vdsat など all_sat の計算に使った列は入力に入れない。
+#   評価は「学習に使っていない (W1, W2, L1, L2) の組」で行う。
 # ============================================================
 
 
@@ -52,7 +42,7 @@ from sklearn.metrics import (
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(
-    os.path.join(BASE_DIR, "..")
+    os.path.join(BASE_DIR, "..", "..")
 )
 
 STUDY_DIR = os.path.join(
@@ -62,13 +52,13 @@ STUDY_DIR = os.path.join(
 
 CSV_PATH = os.path.join(
     STUDY_DIR,
-    "opamp_results.csv"
+    "cascade_results.csv"
 )
 
 # 結果の保存先
 OUT_DIR = os.path.join(
     STUDY_DIR,
-    "opamp_classifier"
+    "cascade_classifier"
 )
 
 MODEL_DIR = os.path.join(
@@ -82,11 +72,10 @@ MODEL_DIR = os.path.join(
 # ============================================================
 
 # 設計 (W, L の組) を区別する列
-SIZE_COLS = ["Win", "Wload", "Wtail", "W6", "W7", "Wbp", "Wbn", "L"]
-DESIGN_KEYS = [f"{c}_um" for c in SIZE_COLS]
+DESIGN_KEYS = ["W1_um", "W2_um", "L1_um", "L2_um"]
 
 # 入力にする列
-FEATURES = [f"log_{c}" for c in SIZE_COLS] + ["log_Ibias", "Vin_V"]
+FEATURES = ["log_W1", "log_W2", "log_L1", "log_L2", "Vb_V", "Vin_V"]
 
 LABEL = "all_sat"
 
@@ -97,17 +86,7 @@ TEST_DESIGN_RATIO = 0.2
 SVM_TRAIN_SAMPLES = 30000
 
 # MLP の学習データ数 (None なら全部)
-MLP_TRAIN_SAMPLES = 3_000_000
-
-# ロジスティック回帰の学習データ数
-# (3次の多項式特徴量が 286 個になり、メモリを多く使うので間引く)
-LOGREG_TRAIN_SAMPLES = 1_000_000
-
-# 予測を何行ずつに分けるか (多項式特徴量などでメモリを使いすぎないため)
-PREDICT_CHUNK = 500_000
-
-# 比較図を描く設計の数 (誤りの多い順)
-MAX_MAPS = 30
+MLP_TRAIN_SAMPLES = None
 
 SEED = 0
 
@@ -121,26 +100,17 @@ def load_data():
     CSV を読み、W, L を log に変換した列を足す
     """
 
-    df = pd.read_csv(
-        CSV_PATH,
-        usecols=DESIGN_KEYS + ["Ibias_uA", "Vin_V", LABEL],
-        dtype={
-            **{k: np.float32 for k in DESIGN_KEYS + ["Ibias_uA", "Vin_V"]},
-            LABEL: np.int8,
-        },
-    )
+    df = pd.read_csv(CSV_PATH)
 
-    for col in SIZE_COLS:
+    for col in ["W1", "W2", "L1", "L2"]:
         df[f"log_{col}"] = np.log(df[f"{col}_um"])
-
-    df["log_Ibias"] = np.log(df["Ibias_uA"])
 
     return df
 
 
 def split_by_design(df):
     """
-    (Win, Wload, Wtail, L) の組単位で学習用とテスト用に分ける
+    (W1, W2, L1, L2) の組単位で学習用とテスト用に分ける
     """
 
     designs = df[DESIGN_KEYS].drop_duplicates().reset_index(drop=True)
@@ -222,7 +192,7 @@ def build_models():
                 StandardScaler(),
                 LogisticRegression(max_iter=2000, C=10.0),
             ),
-            LOGREG_TRAIN_SAMPLES,
+            None,
         ),
         "SVM": (
             make_pipeline(
@@ -238,29 +208,6 @@ def build_models():
             SVM_TRAIN_SAMPLES,
         ),
     }
-
-
-def predict_proba(model, X):
-    """
-    飽和する確率を PREDICT_CHUNK 行ずつ予測してつなげる
-    """
-
-    return np.concatenate([
-        model.predict_proba(X[i:i + PREDICT_CHUNK])[:, 1]
-        for i in range(0, len(X), PREDICT_CHUNK)
-    ])
-
-
-def errors_per_design(df, y_true, probs):
-    """
-    設計ごとの各モデルの誤り数 (df と probs の行は対応している)
-    """
-
-    err = df[DESIGN_KEYS].copy()
-    for name, prob in probs.items():
-        err[f"{name}_err"] = ((prob >= 0.5).astype(int) != y_true).astype(int)
-
-    return err.groupby(DESIGN_KEYS, as_index=False).sum()
 
 
 def evaluate(y_true, prob):
@@ -312,7 +259,7 @@ def plot_pr_curves(y_true, probs, path):
 
 def plot_design_maps(test, probs, design, path):
     """
-    1つの設計について、正解と各モデルの予測を Vin-Ibias 平面に並べる
+    1つの設計について、正解と各モデルの予測を Vin-Vb 平面に並べる
     (TP / TN / FP / FN で色分け)
     """
 
@@ -324,12 +271,12 @@ def plot_design_maps(test, probs, design, path):
     y = sub[LABEL].to_numpy()
 
     vin = np.sort(sub["Vin_V"].unique())
-    ib = np.sort(sub["Ibias_uA"].unique())
+    vb = np.sort(sub["Vb_V"].unique())
     xi = np.searchsorted(vin, sub["Vin_V"].to_numpy())
-    yi = np.searchsorted(ib, sub["Ibias_uA"].to_numpy())
+    yi = np.searchsorted(vb, sub["Vb_V"].to_numpy())
 
     def to_grid(values):
-        g = np.full((len(ib), len(vin)), np.nan)
+        g = np.full((len(vb), len(vin)), np.nan)
         g[yi, xi] = values
         return g
 
@@ -346,7 +293,7 @@ def plot_design_maps(test, probs, design, path):
     )
 
     truth = to_grid(y)
-    axes[0].pcolormesh(vin, ib, truth, cmap=cmap, vmin=-0.5, vmax=3.5,
+    axes[0].pcolormesh(vin, vb, truth, cmap=cmap, vmin=-0.5, vmax=3.5,
                        shading="nearest")
     axes[0].set_title("正解 (all_sat)")
 
@@ -358,15 +305,15 @@ def plot_design_maps(test, probs, design, path):
         )
         n_err = int((pred != y).sum())
 
-        ax.pcolormesh(vin, ib, to_grid(cls), cmap=cmap, vmin=-0.5,
+        ax.pcolormesh(vin, vb, to_grid(cls), cmap=cmap, vmin=-0.5,
                       vmax=3.5, shading="nearest")
-        ax.contour(vin, ib, truth, levels=[0.5], colors="k",
+        ax.contour(vin, vb, truth, levels=[0.5], colors="k",
                    linewidths=0.8)
         ax.set_title(f"{name} (誤り {n_err})")
 
     for ax in axes:
         ax.set_xlabel("Vin [V]")
-    axes[0].set_ylabel("Ibias [uA]")
+    axes[0].set_ylabel("Vb [V]")
 
     handles = [
         plt.matplotlib.patches.Patch(color=cmap(i), label=lab)
@@ -377,8 +324,8 @@ def plot_design_maps(test, probs, design, path):
                bbox_to_anchor=(0.5, -0.02))
 
     fig.suptitle(
-        " ".join(f"{c}={design[f'{c}_um']:g}" for c in SIZE_COLS)
-        + " [um]  (テスト設計)"
+        f"W1={design['W1_um']} W2={design['W2_um']} "
+        f"L1={design['L1_um']} L2={design['L2_um']} [um]  (テスト設計)"
     )
     fig.tight_layout(rect=(0, 0.06, 1, 1))
     fig.savefig(path, dpi=130)
@@ -419,7 +366,7 @@ def main():
         t_fit = time.perf_counter() - t0
 
         t0 = time.perf_counter()
-        prob = predict_proba(model, X_test)
+        prob = model.predict_proba(X_test)[:, 1]
         t_pred = time.perf_counter() - t0
 
         m = evaluate(y_test, prob)
@@ -446,8 +393,19 @@ def main():
     )
 
     # テスト設計ごとの誤り数
-    per_design = errors_per_design(test, y_test, probs)
-    per_design.to_csv(
+    per_design = []
+    for _, d in test_designs.iterrows():
+        mask = np.ones(len(test), dtype=bool)
+        for k in DESIGN_KEYS:
+            mask &= np.isclose(test[k].to_numpy(), d[k])
+        row = {k: d[k] for k in DESIGN_KEYS}
+        for name, prob in probs.items():
+            row[f"{name}_err"] = int(
+                ((prob[mask] >= 0.5).astype(int) != y_test[mask]).sum()
+            )
+        per_design.append(row)
+
+    pd.DataFrame(per_design).to_csv(
         os.path.join(OUT_DIR, "errors_per_design.csv"),
         index=False
     )
@@ -457,18 +415,11 @@ def main():
         os.path.join(OUT_DIR, "pr_curves.png")
     )
 
-    # 全モデルの誤りの合計が多い設計から MAX_MAPS 個だけ描く
-    err_cols = [c for c in per_design.columns if c.endswith("_err")]
-    worst = (
-        per_design.assign(total=per_design[err_cols].sum(axis=1))
-        .sort_values("total", ascending=False)
-        .head(MAX_MAPS)
-    )
-
-    for rank, (_, d) in enumerate(worst.iterrows(), 1):
-        fname = f"map_{rank:02d}_" + "_".join(
-            f"{c.lower()}_{d[f'{c}_um']:g}" for c in SIZE_COLS
-        ) + ".png"
+    for _, d in test_designs.iterrows():
+        fname = (
+            f"map_w1_{d['W1_um']}_w2_{d['W2_um']}"
+            f"_l1_{d['L1_um']}_l2_{d['L2_um']}.png"
+        )
         plot_design_maps(test, probs, d, os.path.join(OUT_DIR, fname))
 
     print("\n" + metrics.to_string(index=False))

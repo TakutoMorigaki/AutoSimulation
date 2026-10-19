@@ -23,16 +23,18 @@ from sklearn.metrics import (
 
 
 # ============================================================
-# cascade 回路で「全トランジスタが飽和するか (all_sat)」を
+# 5TOTA 回路で「全トランジスタ (M1～M5) が飽和するか (all_sat)」を
 # 設計パラメータだけから予測する二値分類器を4種類比較する
 #
 #   LightGBM / MLP / ロジスティック回帰 / SVM (RBF)
 #
-#   入力 : W1, W2, L1, L2, Vb, Vin   (W, L は log を取る)
+#   入力 : Wn, Wp, Wtail, L, Vb, Vin   (W, L は log を取る)
+#          Wn: 差動対 M1, M2 / Wp: PMOS カレントミラー M3, M4 / Wtail: テール M5
+#          (3種類の W を独立に振ったデータ 5tota_wsplit_results.csv を使う)
 #   出力 : all_sat (1 = M1, M2 とも飽和)
 #
-#   Vout, vds, vdsat など all_sat の計算に使った列は入力に入れない。
-#   評価は「学習に使っていない (W1, W2, L1, L2) の組」で行う。
+#   gain_dc_dB, vds, vdsat などシミュレーションの出力は入力に入れない。
+#   評価は「学習に使っていない (Wn, Wp, Wtail, L) の組」で行う。
 # ============================================================
 
 
@@ -42,7 +44,7 @@ from sklearn.metrics import (
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(
-    os.path.join(BASE_DIR, "..")
+    os.path.join(BASE_DIR, "..", "..")
 )
 
 STUDY_DIR = os.path.join(
@@ -52,13 +54,13 @@ STUDY_DIR = os.path.join(
 
 CSV_PATH = os.path.join(
     STUDY_DIR,
-    "cascade_results.csv"
+    "5tota_wsplit_results.csv"
 )
 
 # 結果の保存先
 OUT_DIR = os.path.join(
     STUDY_DIR,
-    "cascade_classifier"
+    "5tota_wsplit_classifier"
 )
 
 MODEL_DIR = os.path.join(
@@ -72,10 +74,10 @@ MODEL_DIR = os.path.join(
 # ============================================================
 
 # 設計 (W, L の組) を区別する列
-DESIGN_KEYS = ["W1_um", "W2_um", "L1_um", "L2_um"]
+DESIGN_KEYS = ["Wn_um", "Wp_um", "Wtail_um", "L_um"]
 
 # 入力にする列
-FEATURES = ["log_W1", "log_W2", "log_L1", "log_L2", "Vb_V", "Vin_V"]
+FEATURES = ["log_Wn", "log_Wp", "log_Wtail", "log_L", "Vb_V", "Vin_V"]
 
 LABEL = "all_sat"
 
@@ -102,7 +104,7 @@ def load_data():
 
     df = pd.read_csv(CSV_PATH)
 
-    for col in ["W1", "W2", "L1", "L2"]:
+    for col in ["Wn", "Wp", "Wtail", "L"]:
         df[f"log_{col}"] = np.log(df[f"{col}_um"])
 
     return df
@@ -110,7 +112,7 @@ def load_data():
 
 def split_by_design(df):
     """
-    (W1, W2, L1, L2) の組単位で学習用とテスト用に分ける
+    (Wn, Wp, Wtail, L) の組単位で学習用とテスト用に分ける
     """
 
     designs = df[DESIGN_KEYS].drop_duplicates().reset_index(drop=True)
@@ -324,8 +326,8 @@ def plot_design_maps(test, probs, design, path):
                bbox_to_anchor=(0.5, -0.02))
 
     fig.suptitle(
-        f"W1={design['W1_um']} W2={design['W2_um']} "
-        f"L1={design['L1_um']} L2={design['L2_um']} [um]  (テスト設計)"
+        f"Wn={design['Wn_um']} Wp={design['Wp_um']} "
+        f"Wtail={design['Wtail_um']} L={design['L_um']} [um]  (テスト設計)"
     )
     fig.tight_layout(rect=(0, 0.06, 1, 1))
     fig.savefig(path, dpi=130)
@@ -417,8 +419,8 @@ def main():
 
     for _, d in test_designs.iterrows():
         fname = (
-            f"map_w1_{d['W1_um']}_w2_{d['W2_um']}"
-            f"_l1_{d['L1_um']}_l2_{d['L2_um']}.png"
+            f"map_wn_{d['Wn_um']}_wp_{d['Wp_um']}"
+            f"_wt_{d['Wtail_um']}_l_{d['L_um']}.png"
         )
         plot_design_maps(test, probs, d, os.path.join(OUT_DIR, fname))
 
