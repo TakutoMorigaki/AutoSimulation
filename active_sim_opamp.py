@@ -47,8 +47,9 @@ from OPAMP import (
 #          - RANDOM_FRAC の割合は設計空間からランダムに選ぶ (見落とし対策と est_err 用)
 #     4. 選んだ点を ngspice で並列にシミュレーションし、結果を samples.csv に追記する
 #
-#   グリッドではなく連続値で振る。範囲は OPAMP.py のグリッドと同じ (PARAM_SPACE)。
-#   W, L, Ibias は log で一様に、Vin は線形で一様に振る。
+#   グリッドではなく連続値で振る。範囲 (PARAM_SPACE) は、端での外挿を避けるため
+#   OPAMP.py のグリッドより広くとる。W, L, Ibias は log で一様に、Vin は線形で一様に振る。
+#   広げられない L の下限 (0.28 um) には、FACE_POINTS の割合だけ意図的に点を置く。
 #
 #   補助的な指標 (停止には使わない):
 #     est_err  : 直近 STOP_WINDOW ラウンドで「ランダムに選んだ点」について、
@@ -59,7 +60,7 @@ from OPAMP import (
 #   途中で止めても、もう一度実行すれば続きから再開する。
 #   (samples.csv と rounds.csv、stop_pred/ を読み直す。最初からやり直す場合は OUT_DIR を消す)
 #
-#   出力 (study/opamp_active_sim/):
+#   出力 (study/opamp_active_sim_face/):
 #     samples.csv          : シミュレーションした点 (OPAMP.py と同じ列 + round, role, pred_before)
 #     failed.csv           : シミュレーションに失敗した点
 #     rounds.csv           : ラウンドごとの点数、change_rate、est_err、test_acc、時間
@@ -68,7 +69,7 @@ from OPAMP import (
 #     models/ensemble.joblib : 最後に学習した MLP (ENSEMBLE_SIZE 個のリスト)
 #
 #   環境変数:
-#     AL_TARGET   : 停止する change_rate のしきい値 (既定 0.005)
+#     AL_TARGET   : 停止する change_rate のしきい値 (既定 0.003)
 #     AL_BUDGET   : シミュレーション回数の上限
 #     AL_TEST     : 0 にすると既存グリッドでの評価をしない
 #     NUM_WORKERS : ngspice の並列数 (OPAMP.py と同じ。既定は CPU コア数)
@@ -82,7 +83,7 @@ from OPAMP import (
 
 OUT_DIR = os.path.join(
     STUDY_DIR,
-    "opamp_active_sim_ex"
+    "opamp_active_sim_face"
 )
 
 SAMPLES_PATH = os.path.join(OUT_DIR, "samples.csv")
@@ -108,13 +109,21 @@ PARAM_SPACE = {
     "W7_um": (5.0, 100.0, True, 2),      # 2段目 NMOS ソース接地 M7
     "Wbp_um": (5.0, 100.0, True, 2),     # バイアス PMOS M8, M9
     "Wbn_um": (5.0, 100.0, True, 2),     # バイアス NMOS M10, M11
-    "L_um": (0.25, 2.5, True, 2),      # L (M1～M12 で共通)
+    "L_um": (0.28, 2.5, True, 2),      # L (M1～M12 で共通)
     "Ibias_uA": (1.0, 100.0, True, 2),
     "Vin_V": (0, 3.3, False, 3),
 }
 
 # 入力の列 (= DESIGN_KEYS + Ibias, Vin)
 PARAM_KEYS = list(PARAM_SPACE)
+
+# 範囲を広げられない端 (L の下限はトランジスタモデルの限界) に、意図的に点を置く
+#   {列: (値, 割合)} : sample_space で作る点のうち「割合」の点だけ、その列を「値」に固定する
+#   (能動学習の候補点・ランダムな点・停止判定用の点のすべてに同じ割合で入る)
+#   一様に振るだけだと L = 0.28 の点は約 1% しかなく、そこでの誤りが多く残ったため
+FACE_POINTS = {
+    "L_um": (0.28, 0.10),
+}
 
 LABEL = "all_sat"
 
@@ -171,6 +180,7 @@ SEED = 0
 def sample_space(rng, n):
     """
     PARAM_SPACE の範囲から n 点を一様に作る (W, L, Ibias は log で一様)。
+    FACE_POINTS の列は、指定した割合の点だけ端の値に固定する。
     戻り値は (n, len(PARAM_KEYS)) の配列 (列は PARAM_KEYS の順)
     """
 
@@ -184,6 +194,9 @@ def sample_space(rng, n):
         else:
             P[:, j] = lo + u[:, j] * (hi - lo)
         P[:, j] = np.round(P[:, j], digits)
+
+    for k, (value, frac) in FACE_POINTS.items():
+        P[rng.random(n) < frac, PARAM_KEYS.index(k)] = value
 
     return P
 
