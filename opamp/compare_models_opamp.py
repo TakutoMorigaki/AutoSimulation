@@ -106,9 +106,9 @@ NAMES = {"mlp": "MLP", "svm": "SVM"}
 # テスト点のシミュレーション
 # ============================================================
 
-def done_indices():
+def done_indices(paths):
     idx = set()
-    for path in [TEST_PATH, FAILED_PATH]:
+    for path in paths:
         if os.path.exists(path) and os.path.getsize(path):
             idx |= set(pd.read_csv(path, usecols=["idx"])["idx"].astype(int))
     return idx
@@ -119,16 +119,26 @@ def simulate_test(P):
     テスト点をシミュレーションし、終わった順に test.csv に追記する (記録済みの点は飛ばす)
     """
 
-    for path in [TEST_PATH, FAILED_PATH]:
-        mlp.repair_tail(path)
+    simulate_points(P, TEST_PATH, FAILED_PATH, "test")
 
-    mlp.init_csv(TEST_PATH, ["idx"] + FIELDNAMES)
-    mlp.init_csv(FAILED_PATH, ["idx"] + PARAM_KEYS + ["error"])
 
-    skip = done_indices()
+def simulate_points(P, path, failed_path, name):
+    """
+    P の各点をシミュレーションし、終わった順に path に追記する (記録済みの点は飛ばす)。
+    失敗した点は failed_path に書く。name は表示と作業用ファイル名に使う
+    (compare_sampling_opamp.py のランダムサンプリングの点にも使う)
+    """
+
+    for p in [path, failed_path]:
+        mlp.repair_tail(p)
+
+    mlp.init_csv(path, ["idx"] + FIELDNAMES)
+    mlp.init_csv(failed_path, ["idx"] + PARAM_KEYS + ["error"])
+
+    skip = done_indices([path, failed_path])
     todo = [i for i in range(len(P)) if i not in skip]
 
-    print(f"テスト点: {len(P)} 点 (済 {len(P) - len(todo)}, 残り {len(todo)})")
+    print(f"{name}: {len(P)} 点 (済 {len(P) - len(todo)}, 残り {len(todo)})")
 
     if not todo:
         return
@@ -145,8 +155,8 @@ def simulate_test(P):
 
     try:
         with ThreadPoolExecutor(max_workers=num_workers) as executor, \
-                open(TEST_PATH, "a", newline="") as f, \
-                open(FAILED_PATH, "a", newline="") as ff:
+                open(path, "a", newline="") as f, \
+                open(failed_path, "a", newline="") as ff:
 
             writer = csv.DictWriter(f, fieldnames=["idx"] + FIELDNAMES)
             failed = csv.DictWriter(ff, fieldnames=["idx"] + PARAM_KEYS + ["error"])
@@ -156,7 +166,7 @@ def simulate_test(P):
                 v = dict(zip(PARAM_KEYS, (float(x) for x in P[i])))
                 sizes = {k: v[k] for k in DESIGN_KEYS}
                 fut = executor.submit(
-                    simulate_point, template, work_dir, f"test_{i}",
+                    simulate_point, template, work_dir, f"{name}_{i}",
                     sizes, v["Ibias_uA"], v["Vin_V"]
                 )
                 futures[fut] = (i, v)
