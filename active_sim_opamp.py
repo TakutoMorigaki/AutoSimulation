@@ -82,7 +82,7 @@ from OPAMP import (
 
 OUT_DIR = os.path.join(
     STUDY_DIR,
-    "opamp_active_sim"
+    "opamp_active_sim_ex"
 )
 
 SAMPLES_PATH = os.path.join(OUT_DIR, "samples.csv")
@@ -101,16 +101,16 @@ TEST_CSV = os.path.join(STUDY_DIR, "opamp_results.csv")
 
 # 振る範囲: (下限, 上限, log で振るか, 丸める小数点以下の桁数)
 PARAM_SPACE = {
-    "Win_um": (5.0, 50.0, True, 2),     # PMOS 差動対 M1, M2
-    "Wload_um": (5.0, 50.0, True, 2),   # NMOS 負荷ミラー M3, M4
-    "Wtail_um": (5.0, 50.0, True, 2),   # PMOS テール M5
-    "W6_um": (5.0, 25.0, True, 2),      # 2段目 PMOS 電流源 M6
-    "W7_um": (5.0, 25.0, True, 2),      # 2段目 NMOS ソース接地 M7
-    "Wbp_um": (5.0, 25.0, True, 2),     # バイアス PMOS M8, M9
-    "Wbn_um": (5.0, 25.0, True, 2),     # バイアス NMOS M10, M11
-    "L_um": (0.28, 2.5, True, 2),      # L (M1～M12 で共通)
-    "Ibias_uA": (1.0, 45.0, True, 2),
-    "Vin_V": (0.1, 3.3, False, 3),
+    "Win_um": (5.0, 100.0, True, 2),     # PMOS 差動対 M1, M2
+    "Wload_um": (5.0, 100.0, True, 2),   # NMOS 負荷ミラー M3, M4
+    "Wtail_um": (5.0, 100.0, True, 2),   # PMOS テール M5
+    "W6_um": (5.0, 100.0, True, 2),      # 2段目 PMOS 電流源 M6
+    "W7_um": (5.0, 100.0, True, 2),      # 2段目 NMOS ソース接地 M7
+    "Wbp_um": (5.0, 100.0, True, 2),     # バイアス PMOS M8, M9
+    "Wbn_um": (5.0, 100.0, True, 2),     # バイアス NMOS M10, M11
+    "L_um": (0.25, 2.5, True, 2),      # L (M1～M12 で共通)
+    "Ibias_uA": (1.0, 100.0, True, 2),
+    "Vin_V": (0, 3.3, False, 3),
 }
 
 # 入力の列 (= DESIGN_KEYS + Ibias, Vin)
