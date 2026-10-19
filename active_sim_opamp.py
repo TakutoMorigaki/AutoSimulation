@@ -60,7 +60,7 @@ from OPAMP import (
 #   途中で止めても、もう一度実行すれば続きから再開する。
 #   (samples.csv と rounds.csv、stop_pred/ を読み直す。最初からやり直す場合は OUT_DIR を消す)
 #
-#   出力 (study/opamp_active_sim_face/):
+#   出力 (study/opamp_active_sim_w2p5/):
 #     samples.csv          : シミュレーションした点 (OPAMP.py と同じ列 + round, role, pred_before)
 #     failed.csv           : シミュレーションに失敗した点
 #     rounds.csv           : ラウンドごとの点数、change_rate、est_err、test_acc、時間
@@ -83,7 +83,7 @@ from OPAMP import (
 
 OUT_DIR = os.path.join(
     STUDY_DIR,
-    "opamp_active_sim_face"
+    "opamp_active_sim_w2p5"
 )
 
 SAMPLES_PATH = os.path.join(OUT_DIR, "samples.csv")
@@ -102,13 +102,13 @@ TEST_CSV = os.path.join(STUDY_DIR, "opamp_results.csv")
 
 # 振る範囲: (下限, 上限, log で振るか, 丸める小数点以下の桁数)
 PARAM_SPACE = {
-    "Win_um": (0.22, 100.0, True, 2),     # PMOS 差動対 M1, M2
-    "Wload_um": (0.22, 100.0, True, 2),   # NMOS 負荷ミラー M3, M4
-    "Wtail_um": (0.22, 100.0, True, 2),   # PMOS テール M5
-    "W6_um": (0.22, 100.0, True, 2),      # 2段目 PMOS 電流源 M6
-    "W7_um": (0.22, 100.0, True, 2),      # 2段目 NMOS ソース接地 M7
-    "Wbp_um": (0.22, 100.0, True, 2),     # バイアス PMOS M8, M9
-    "Wbn_um": (0.22, 100.0, True, 2),     # バイアス NMOS M10, M11
+    "Win_um": (2.5, 100.0, True, 2),     # PMOS 差動対 M1, M2
+    "Wload_um": (2.5, 100.0, True, 2),   # NMOS 負荷ミラー M3, M4
+    "Wtail_um": (2.5, 100.0, True, 2),   # PMOS テール M5
+    "W6_um": (2.5, 100.0, True, 2),      # 2段目 PMOS 電流源 M6
+    "W7_um": (2.5, 100.0, True, 2),      # 2段目 NMOS ソース接地 M7
+    "Wbp_um": (2.5, 100.0, True, 2),     # バイアス PMOS M8, M9
+    "Wbn_um": (2.5, 100.0, True, 2),     # バイアス NMOS M10, M11
     "L_um": (0.28, 2.5, True, 2),      # L (M1～M12 で共通)
     "Ibias_uA": (1.0, 100.0, True, 2),
     "Vin_V": (0, 3.3, False, 3),
