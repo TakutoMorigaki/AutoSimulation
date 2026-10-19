@@ -50,6 +50,7 @@ SVM_GAMMA = 0.05
 
 # 予測を何行ずつに分けて並列に計算するか
 SVM_CHUNK = 25_000
+SVM_MIN_CHUNK = 1_000   # これより細かくは分けない (並列化の手間の方が大きくなるため)
 SVM_JOBS = int(os.environ.get("SVM_JOBS", os.cpu_count() or 1))
 
 # libsvm のカーネル値のキャッシュ [MB] (大きいほど学習が速い)
@@ -102,16 +103,20 @@ def fit_svm(X, y, seed, n_models):
 
 def decision_svm(model, X):
     """
-    決定関数 f(x) を SVM_CHUNK 行ずつ並列に計算する
+    決定関数 f(x) を分けて並列に計算する。
+    1回分は最大 SVM_CHUNK 行だが、点が少ないときも SVM_JOBS 個以上に分けて全コアを使う
+    (例: 停止判定の 100000 点を 25000 行ずつに分けると、4コアしか使わないため)
     """
 
-    if len(X) <= SVM_CHUNK:
+    chunk = min(SVM_CHUNK, max(SVM_MIN_CHUNK, -(-len(X) // SVM_JOBS)))
+
+    if len(X) <= chunk:
         return model.decision_function(X)
 
     return np.concatenate(
         Parallel(n_jobs=SVM_JOBS)(
-            delayed(model.decision_function)(X[i:i + SVM_CHUNK])
-            for i in range(0, len(X), SVM_CHUNK)
+            delayed(model.decision_function)(X[i:i + chunk])
+            for i in range(0, len(X), chunk)
         )
     )
 

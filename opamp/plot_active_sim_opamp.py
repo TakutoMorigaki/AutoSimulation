@@ -47,6 +47,9 @@ from OPAMP import DESIGN_KEYS
 
 PLOT_DIR = os.path.join(OUT_DIR, "plots")
 
+# 図に書くモデルの名前 (SVM 版 plot_active_sim_opamp_svm.py では "SVM" に差し替える)
+MODEL_NAME = "MLP"
+
 # 既存グリッドのうち、OPAMP.py で振った元の範囲 (図に破線で描く)
 GRID_RANGE = {
     "Win_um": (5.6, 44.8),
@@ -145,7 +148,7 @@ def plot_rounds(rounds, path):
     ax.plot(n, rounds["sim_s"], marker="o", ms=3, color="#9467bd",
             label="シミュレーション")
     ax.plot(n, rounds["fit_s"], marker="s", ms=3, color="#ff7f0e",
-            label="MLP の学習")
+            label=f"{MODEL_NAME} の学習")
     ax.set_xscale("log")
     ax.set_xlabel("シミュレーション回数")
     ax.set_ylabel("時間 [s]")
@@ -268,7 +271,7 @@ def plot_design_map(grid, models, design, path):
     axes[0].pcolormesh(vin, ib, to_grid(y), cmap=cmap, vmin=-0.5,
                        vmax=3.5, shading="nearest")
     axes[0].contour(FV, FI, fine, levels=[0.5], colors="k", linewidths=1.0)
-    axes[0].set_title("正解 (色) と MLP の境界 (黒線)")
+    axes[0].set_title(f"正解 (色) と {MODEL_NAME} の境界 (黒線)")
 
     axes[1].pcolormesh(vin, ib, to_grid(cls), cmap=cmap, vmin=-0.5,
                        vmax=3.5, shading="nearest")
