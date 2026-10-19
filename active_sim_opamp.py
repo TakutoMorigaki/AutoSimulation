@@ -101,14 +101,14 @@ TEST_CSV = os.path.join(STUDY_DIR, "opamp_results.csv")
 
 # 振る範囲: (下限, 上限, log で振るか, 丸める小数点以下の桁数)
 PARAM_SPACE = {
-    "Win_um": (5.0, 45.5, True, 2),     # PMOS 差動対 M1, M2
-    "Wload_um": (5.0, 45.5, True, 2),   # NMOS 負荷ミラー M3, M4
-    "Wtail_um": (5.0, 45.5, True, 2),   # PMOS テール M5
-    "W6_um": (5.0, 23.5, True, 2),      # 2段目 PMOS 電流源 M6
-    "W7_um": (5.0, 23.5, True, 2),      # 2段目 NMOS ソース接地 M7
-    "Wbp_um": (5.0, 23.5, True, 2),     # バイアス PMOS M8, M9
-    "Wbn_um": (5.0, 23.5, True, 2),     # バイアス NMOS M10, M11
-    "L_um": (0.28, 2.4, True, 2),      # L (M1～M12 で共通)
+    "Win_um": (5.0, 50.0, True, 2),     # PMOS 差動対 M1, M2
+    "Wload_um": (5.0, 50.0, True, 2),   # NMOS 負荷ミラー M3, M4
+    "Wtail_um": (5.0, 50.0, True, 2),   # PMOS テール M5
+    "W6_um": (5.0, 25.0, True, 2),      # 2段目 PMOS 電流源 M6
+    "W7_um": (5.0, 25.0, True, 2),      # 2段目 NMOS ソース接地 M7
+    "Wbp_um": (5.0, 25.0, True, 2),     # バイアス PMOS M8, M9
+    "Wbn_um": (5.0, 25.0, True, 2),     # バイアス NMOS M10, M11
+    "L_um": (0.28, 2.5, True, 2),      # L (M1～M12 で共通)
     "Ibias_uA": (1.0, 45.0, True, 2),
     "Vin_V": (0.1, 3.3, False, 3),
 }
@@ -133,7 +133,7 @@ BUDGET = int(os.environ.get("AL_BUDGET", 60000))
 
 # 停止条件: change_rate が TARGET_ERR を STOP_PATIENCE ラウンド続けて下回ったら止める
 # (active_opamp.py の検証では、change_rate ≒ テスト誤り率 だった)
-TARGET_ERR = float(os.environ.get("AL_TARGET", 0.0035))
+TARGET_ERR = float(os.environ.get("AL_TARGET", 0.0030))
 STOP_PATIENCE = 3
 
 # 停止判定用に固定する点の数
